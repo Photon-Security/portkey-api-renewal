@@ -1,6 +1,6 @@
 # Portkey API Key Updater
 
-[![Release](https://img.shields.io/github/v/release/Enelass/portkey-api-renewal?style=flat-square)](https://github.com/Enelass/portkey-api-renewal/releases)
+[![Release](https://img.shields.io/github/v/release/Photon-Security/portkey-api-renewal?style=flat-square)](https://github.com/Photon-Security/portkey-api-renewal/releases)
 [![Package](https://img.shields.io/badge/package-portkey--renew--api--key-informational?style=flat-square)](pyproject.toml)
 [![Images](https://img.shields.io/badge/images-included-brightgreen?style=flat-square)](assets/)
 [![macOS](https://img.shields.io/badge/macOS-26.5_tested-green?style=flat-square)](https://www.apple.com/macos/)
@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12.13_tested-orange?style=flat-square)](https://www.python.org/)
 [![Python Support](https://img.shields.io/badge/Python-3.8--3.12_supported-orange?style=flat-square)](https://www.python.org/)
 [![Portkey](https://img.shields.io/badge/Portkey-Gateway-purple?style=flat-square)](https://portkey.ai/)
-[![Tests](https://img.shields.io/github/actions/workflow/status/Enelass/portkey-api-renewal/changelog.yml?branch=main&label=checks&style=flat-square)](https://github.com/Enelass/portkey-api-renewal/actions/workflows/changelog.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/Photon-Security/portkey-api-renewal/changelog.yml?branch=main&label=checks&style=flat-square)](https://github.com/Photon-Security/portkey-api-renewal/actions/workflows/changelog.yml)
 
 <p align="center">
   <img src="assets/Portkey_API_Logo.png" alt="Portkey API Key Updater Logo" width="160" />
@@ -21,7 +21,7 @@ Automate Portkey API key renewal on macOS. The tool reads your authenticated Por
 ### 1. Install
 
 ```bash
-git clone https://github.com/Enelass/portkey-api-renewal.git
+git clone https://github.com/Photon-Security/portkey-api-renewal.git
 cd portkey-api-renewal
 uv venv && source .venv/bin/activate
 uv pip install -e .
@@ -82,7 +82,7 @@ export GEMINI_API_KEY="$PORTKEY_API_KEY"
 Re-run the installer to update. It is safe on a fresh machine and on an existing install: it refreshes the code and dependencies, and leaves `config/config.json` and `logs/` untouched. Settings added to `config/config.template.json` in newer versions must be merged into your `config.json` by hand.
 
 ```bash
-zsh <(curl -fsSL https://raw.githubusercontent.com/Enelass/portkey-api-renewal/refs/heads/main/install.sh)
+zsh <(curl -fsSL https://raw.githubusercontent.com/Photon-Security/portkey-api-renewal/refs/heads/main/install.sh)
 ```
 
 ## Commands

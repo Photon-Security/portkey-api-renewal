@@ -21,6 +21,11 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - A failed download aborts before anything in the install directory is touched.
 - `PORTKEY_INSTALL_DIR` and `PORTKEY_ZIP_URL` override the install location and download URL (for testing).
 
+### Fixed
+
+- Installer download URL, README badges, clone and update commands now point at `Photon-Security/portkey-api-renewal`
+  instead of the old `Enelass` owner.
+
 ### Documentation
 
 - `docs/auth_analysis.md` now documents which browser and profile are read, that no remote debugging is used,

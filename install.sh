@@ -58,7 +58,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 INSTALL_DIR="${PORTKEY_INSTALL_DIR:-$HOME/Applications/Portkey-API-renewal}"
-GITHUB_ZIP_URL="${PORTKEY_ZIP_URL:-https://github.com/Enelass/portkey-api-renewal/archive/refs/heads/main.zip}"
+GITHUB_ZIP_URL="${PORTKEY_ZIP_URL:-https://github.com/Photon-Security/portkey-api-renewal/archive/refs/heads/main.zip}"
 # Paths owned by the user: never overwritten or deleted by an update.
 PRESERVE_PATHS=("config/config.json" "logs" ".venv" "dontsync")
 REQUIRED_FILES=("pyproject.toml" "src/portkey_key_updater/check_key.py" "src/portkey_key_updater/get_bearer.py" "src/portkey_key_updater/renew_key.py" "src/portkey_key_updater/utils.py")
