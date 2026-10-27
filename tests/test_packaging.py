@@ -106,3 +106,25 @@ def test_license_file_is_mit():
     """The repository should ship the MIT license it declares in pyproject.toml."""
     assert (PROJECT_ROOT / "LICENSE").read_text().startswith("MIT License")
     assert 'license = { text = "MIT" }' in (PROJECT_ROOT / "pyproject.toml").read_text()
+
+
+def test_version_flag_reports_the_product_name_not_the_command(monkeypatch, capsys):
+    """--version should read the same from every entrypoint, whatever script was invoked."""
+    import pytest
+
+    from portkey_key_updater import __app_name__, __version__, check_key
+
+    expected = f"portkey-key-renewal {__version__}"
+    assert __app_name__ == "portkey-key-renewal"
+
+    for argv in (["portkey-check", "--version"], ["check-key", "--version"]):
+        monkeypatch.setattr(os.sys, "argv", argv)
+        with pytest.raises(SystemExit) as exit_info:
+            check_key.main()
+        assert exit_info.value.code == 0
+        assert capsys.readouterr().out.strip() == expected
+
+    with pytest.raises(SystemExit) as exit_info:
+        main.build_parser().parse_args(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == expected

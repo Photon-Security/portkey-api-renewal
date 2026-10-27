@@ -23,6 +23,8 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ### Fixed
 
+- `--version` reports `portkey-key-renewal <version>` from every entrypoint instead of the invoked script name
+  (`portkey-check`, `check-key`, `main.py`).
 - Installer download URL, README badges, clone and update commands now point at `Photon-Security/portkey-api-renewal`
   instead of the old `Enelass` owner.
 

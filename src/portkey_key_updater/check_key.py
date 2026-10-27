@@ -13,7 +13,7 @@ from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from . import __version__
+from . import __app_name__, __version__
 from .get_bearer import (
     extract_bearer_token_from_cookies,
     find_session_in_other_browsers,
@@ -548,7 +548,7 @@ Examples:
         """,
     )
 
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--version", action="version", version=f"{__app_name__} {__version__}")
     parser.add_argument("--renew", action="store_true", help="Force creation of a new Portkey API key")
     parser.add_argument(
         "--force-login",

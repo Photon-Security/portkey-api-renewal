@@ -16,7 +16,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from portkey_key_updater import __version__  # noqa: E402
+from portkey_key_updater import __app_name__, __version__  # noqa: E402
 
 COMMANDS = {
     "check": ("portkey_key_updater.check_key", "Validate the current API key"),
@@ -83,7 +83,7 @@ Examples:
   python3 main.py report
         """,
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--version", action="version", version=f"{__app_name__} {__version__}")
     subparsers = parser.add_subparsers(
         dest="command",
         metavar="command",
