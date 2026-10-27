@@ -9,13 +9,14 @@ import sys
 import os
 import json
 import argparse
+from contextlib import redirect_stderr
 
 import browser_cookie3
 import subprocess
 import time
 from urllib.parse import unquote
 from .logger import log_success, log_warning, log_error, log_info, log_start, log_end
-from .utils import Colors, colored_print, load_config, get_browser_info
+from .utils import Colors, colored_print, load_config, get_browser_info, other_cookie_browsers
 from .portkey_api import list_api_keys
 
 TOKEN_COOKIE_CANDIDATES = ("token", "auth_token", "access_token", "id_token")
@@ -80,6 +81,24 @@ def get_browser_cookies_for_domain(browser_id, domain):
         pass  # Silent fallback
     
     return {}
+
+def find_session_in_other_browsers(domain, default_bundle_id, is_usable=None):
+    """Look for a Portkey bearer token in every supported browser except the default.
+
+    Returns (token, cookies, browser_info) for the first browser whose token passes
+    ``is_usable`` (any non-empty token when omitted), or None. Browsers that are not
+    installed or cannot be read are skipped silently.
+    """
+    for browser in other_cookie_browsers(default_bundle_id):
+        try:
+            with open(os.devnull, "w") as devnull, redirect_stderr(devnull):
+                cookies = get_browser_cookies_for_domain(browser["bundle_id"], domain)
+        except Exception:
+            continue
+        token, _ = extract_bearer_token_from_cookies(cookies)
+        if token and (is_usable is None or is_usable(token)):
+            return token, cookies, browser
+    return None
 
 def extract_cookies_from_jar(cookie_jar, domain):
     """Extract and filter cookies from a cookie jar"""

@@ -5,7 +5,11 @@ import argparse
 import subprocess
 import sys
 
-from .get_bearer import extract_bearer_token_from_cookies, get_browser_cookies_for_domain
+from .get_bearer import (
+    extract_bearer_token_from_cookies,
+    find_session_in_other_browsers,
+    get_browser_cookies_for_domain,
+)
 from .logger import log_end, log_error, log_info, log_start, log_success, log_warning
 from .portkey_api import create_api_key
 from .utils import (
@@ -113,6 +117,13 @@ def _extract_session_token_and_cookies(config):
     )
     domain = config["oauth"]["base_url"].replace("https://", "").replace("http://", "").split("/")[0]
     cookies = get_browser_cookies_for_domain(browser_info["bundle_id"], domain)
+
+    if not extract_bearer_token_from_cookies(cookies)[0]:
+        other_session = find_session_in_other_browsers(domain, browser_info["bundle_id"])
+        if other_session:
+            _, cookies, other_browser = other_session
+            browser_info = other_browser
+            colored_print(f"[INFO] Using the Portkey session found in {other_browser['name']}", Colors.CYAN)
 
     if not cookies:
         colored_print("[ERROR] No cookies found in browser session", Colors.RED)

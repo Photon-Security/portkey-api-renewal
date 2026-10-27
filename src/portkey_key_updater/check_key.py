@@ -14,7 +14,11 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from . import __version__
-from .get_bearer import extract_bearer_token_from_cookies, get_browser_cookies_for_domain
+from .get_bearer import (
+    extract_bearer_token_from_cookies,
+    find_session_in_other_browsers,
+    get_browser_cookies_for_domain,
+)
 from .logger import log_end, log_error, log_info, log_start, log_success
 from .portkey_api import (
     describe_key,
@@ -110,6 +114,30 @@ def _read_browser_session(config, browser_info):
     return token_value, token_cookie_name, cookies
 
 
+def _is_usable_token(token, previous_token=None):
+    """A token is usable when present, different from the one being replaced, and not a known-expired JWT."""
+    return bool(token) and token != previous_token and bearer_token_is_expired(token) is not True
+
+
+def _find_session_in_other_browsers(config, browser_info, previous_token=None):
+    """Look for a usable Portkey session in the supported browsers other than the default one."""
+    found = find_session_in_other_browsers(
+        _browser_cookie_domain(config),
+        browser_info.get("bundle_id"),
+        lambda token: _is_usable_token(token, previous_token),
+    )
+    if not found:
+        return None
+    token, cookies, other = found
+    colored_print(
+        f"[INFO] No usable Portkey session in {browser_info.get('name', 'the default browser')}; "
+        f"using the session found in {other['name']}",
+        Colors.CYAN,
+    )
+    log_info(f"Using Portkey session from {other['name']} instead of the default browser")
+    return token, cookies
+
+
 def _wait_for_cookie_propagation(seconds=COOKIE_PROPAGATION_WAIT_SECONDS):
     """Wait visibly before reading cookies after the user confirms login."""
     for remaining in range(seconds, 0, -1):
@@ -157,6 +185,10 @@ def _refresh_browser_session(
         Colors.YELLOW,
     )
     colored_print("[AUTH] Complete sign-in and MFA, then return here.", Colors.YELLOW)
+    colored_print(
+        f"[AUTH] Signing in with another supported browser ({COOKIE_EXTRACTABLE_BROWSER_NAMES}) also works.",
+        Colors.YELLOW,
+    )
 
     if not sys.stdin.isatty():
         colored_print("[AUTH] After signing in, rerun this command to load the refreshed session.", Colors.YELLOW)
@@ -177,12 +209,12 @@ def _refresh_browser_session(
         if attempt:
             time.sleep(retry_delay)
         token_value, _, cookies = _read_browser_session(config, browser_info)
-        if (
-            token_value
-            and token_value != previous_token
-            and bearer_token_is_expired(token_value) is not True
-        ):
+        if _is_usable_token(token_value, previous_token):
             return token_value, cookies
+        # The user may have signed in with a different browser than the default one.
+        other_session = _find_session_in_other_browsers(config, browser_info, previous_token)
+        if other_session:
+            return other_session
 
     colored_print("[ERROR] The browser still has no current Portkey session after sign-in", Colors.RED)
     return None
@@ -413,6 +445,12 @@ def _extract_session_token_and_cookies(config):
     colored_print(f"[INFO] Attempting to extract cookies for domain: {domain}", Colors.CYAN)
 
     token_value, token_cookie_name, cookies = _read_browser_session(config, browser_info)
+
+    if not _is_usable_token(token_value):
+        other_session = _find_session_in_other_browsers(config, browser_info)
+        if other_session:
+            token_value, cookies = other_session
+            token_cookie_name = extract_bearer_token_from_cookies(cookies)[1]
 
     if not cookies:
         colored_print("[ERROR] No cookies found in browser session", Colors.RED)

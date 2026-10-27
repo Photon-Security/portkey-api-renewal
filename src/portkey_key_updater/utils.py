@@ -45,6 +45,19 @@ COOKIE_EXTRACTABLE_BROWSER_IDS = {
     "org.mozilla.firefox",
 }
 COOKIE_EXTRACTABLE_BROWSER_NAMES = "Chrome, Edge, Firefox, or Brave"
+# Order in which non-default browsers are tried when the default one holds no usable session.
+COOKIE_FALLBACK_BROWSERS = (
+    {"bundle_id": "com.google.chrome", "name": "Google Chrome"},
+    {"bundle_id": "com.microsoft.edgemac", "name": "Microsoft Edge"},
+    {"bundle_id": "com.brave.Browser", "name": "Brave Browser"},
+    {"bundle_id": "org.mozilla.firefox", "name": "Firefox"},
+)
+
+
+def other_cookie_browsers(default_bundle_id):
+    """Return the supported browsers other than the default, as browser_info dicts."""
+    default = (default_bundle_id or "").lower()
+    return [dict(b) for b in COOKIE_FALLBACK_BROWSERS if b["bundle_id"].lower() != default]
 
 # ============================================================================
 # COLOR UTILITIES

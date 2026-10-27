@@ -8,22 +8,26 @@ The updater uses the existing authenticated Portkey browser session. It does not
 
 ### Which browser is read
 
-Only the **default macOS browser** is read. There is no scan of other installed browsers and no fallback.
+The **default macOS browser** is always tried first and drives the normal flow: its cookies are read, and when the session is missing or expired it is the browser opened for sign-in.
 
 1. `utils.get_default_browser()` asks macOS Launch Services for the handler of `public.html` (then the `http` scheme) and returns its bundle ID.
-2. `get_browser_cookies_for_domain()` maps that single bundle ID to one `browser_cookie3` reader.
-3. If the default browser is not in the table, extraction returns no cookies and the tool tells the user to switch their default browser.
+2. `get_browser_cookies_for_domain()` maps that bundle ID to one `browser_cookie3` reader.
+3. If the default browser yields no usable bearer token, the tool tries the other supported browsers in this order: Chrome, Edge, Brave, Firefox (`find_session_in_other_browsers()`). The first one holding a usable token wins.
 
-| Default browser | Bundle ID | Result |
+"Usable" means a bearer cookie is present and, when it is a JWT, not already expired. After a sign-in prompt the token must also differ from the one being replaced, so a stale session in another browser is not mistaken for the new login. Browsers that are not installed or cannot be read are skipped silently.
+
+This fallback runs in three places: the initial read in `portkey-check` and `portkey-renew`, and again after the user confirms sign-in. A user who signs in with Firefox while Safari or Chrome is the default is therefore still picked up. The sign-in page is opened in the default browser, and the prompt tells the user another supported browser works too.
+
+| Browser | Bundle ID | Result |
 | --- | --- | --- |
-| Google Chrome | `com.google.chrome` | Supported |
-| Microsoft Edge | `com.microsoft.edgemac` | Supported |
-| Brave | `com.brave.Browser` / `com.brave.browser` | Supported |
-| Firefox | `org.mozilla.firefox` | Supported |
-| Safari | `com.apple.safari` | Not supported (sandboxing); explicit error |
-| Opera, Vivaldi, Chromium, other | various | Not supported; "Unsupported browser" |
+| Google Chrome | `com.google.chrome` | Supported, default or fallback |
+| Microsoft Edge | `com.microsoft.edgemac` | Supported, default or fallback |
+| Brave | `com.brave.Browser` / `com.brave.browser` | Supported, default or fallback |
+| Firefox | `org.mozilla.firefox` | Supported, default or fallback |
+| Safari | `com.apple.safari` | Not supported (sandboxing); never read, but a supported browser can still be used as fallback |
+| Opera, Vivaldi, Chromium, other | various | Not supported |
 
-So a user who is signed in to Portkey in Firefox but whose default browser is Safari gets "no cookies" even though a valid session exists. The fix is to change the default browser, not to sign in again.
+Reading a Chromium-family browser that is installed can trigger its own macOS Keychain prompt ("Chrome Safe Storage", "Microsoft Edge Safe Storage", ...), even when the user never signed in there. Choose **Always Allow** to stop repeat prompts.
 
 ### Remote debugging is not used
 
@@ -61,8 +65,8 @@ Authorization: Bearer <token>
 Every failure in this stage is swallowed: both extraction attempts catch all exceptions, and `check_key.py` also redirects stderr while reading. These distinct causes therefore all produce the same `No cookies found in browser session`:
 
 - Not signed in, or the session has expired.
-- Signed in under a different Chrome profile or a non-default browser.
-- Default browser not supported.
+- Signed in under a different Chrome profile than `Default`. (A non-default *browser* is now covered by the fallback.)
+- Default browser not supported and no other supported browser holds a session.
 - Keychain access to the Safe Storage item denied. `browser_cookie3` then falls back to a default password that fails to decrypt.
 
 To see the real error, run this with the same browser (replace `chrome` with `edge`, `brave` or `firefox` as needed):

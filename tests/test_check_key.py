@@ -241,3 +241,82 @@ def test_probe_never_prints_the_api_key(monkeypatch, capsys):
     captured = capsys.readouterr()
 
     assert "pk-secret-value-1234" not in captured.out + captured.err
+
+
+def _jar(token):
+    return {"auth_token": {"value": token}} if token else {}
+
+
+def test_other_browsers_are_tried_when_default_has_no_session(monkeypatch):
+    from portkey_key_updater import get_bearer
+
+    tried = []
+
+    def fake_cookies(browser_id, domain):
+        tried.append(browser_id)
+        return _jar("edge-token") if browser_id == "com.microsoft.edgemac" else {}
+
+    monkeypatch.setattr(get_bearer, "get_browser_cookies_for_domain", fake_cookies)
+
+    result = check_key._find_session_in_other_browsers(
+        {"oauth": {"base_url": "https://portkey.example.com"}},
+        {"bundle_id": "com.google.chrome", "name": "Google Chrome"},
+    )
+
+    assert result == ("edge-token", _jar("edge-token"))
+    assert tried == ["com.microsoft.edgemac"]
+
+
+def test_finder_skips_default_unreadable_and_unusable_browsers(monkeypatch):
+    from portkey_key_updater import get_bearer
+
+    def fake_cookies(browser_id, domain):
+        if browser_id == "com.microsoft.edgemac":
+            raise RuntimeError("keychain denied")
+        if browser_id == "com.brave.Browser":
+            return _jar("same-as-old")
+        if browser_id == "org.mozilla.firefox":
+            return _jar("fresh")
+        raise AssertionError(f"unexpected browser {browser_id}")
+
+    monkeypatch.setattr(get_bearer, "get_browser_cookies_for_domain", fake_cookies)
+
+    token, cookies, browser = get_bearer.find_session_in_other_browsers(
+        "portkey.example.com",
+        "com.google.chrome",
+        lambda token: token != "same-as-old",
+    )
+
+    assert token == "fresh"
+    assert browser["name"] == "Firefox"
+
+
+def test_finder_returns_none_when_no_other_browser_has_a_session(monkeypatch):
+    from portkey_key_updater import get_bearer
+
+    monkeypatch.setattr(get_bearer, "get_browser_cookies_for_domain", lambda *a: {})
+
+    assert get_bearer.find_session_in_other_browsers("portkey.example.com", "com.google.chrome") is None
+
+
+def test_refresh_accepts_session_created_in_another_browser(monkeypatch):
+    monkeypatch.setattr(check_key, "open_browser", lambda url: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(check_key.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(builtins, "input", lambda prompt: "")
+    monkeypatch.setattr(check_key, "_read_browser_session", lambda *args: (None, None, {}))
+    monkeypatch.setattr(
+        check_key,
+        "_find_session_in_other_browsers",
+        lambda config, info, previous=None: ("firefox-token", _jar("firefox-token")),
+    )
+
+    result = check_key._refresh_browser_session(
+        {"oauth": {"base_url": "https://portkey.example.com"}},
+        {"bundle_id": "com.google.chrome", "name": "Google Chrome"},
+        previous_token="old",
+        max_attempts=1,
+        retry_delay=0,
+        cookie_wait_seconds=0,
+    )
+
+    assert result == ("firefox-token", _jar("firefox-token"))

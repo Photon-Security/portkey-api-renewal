@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+### Added
+
+- Fall back to the other supported browsers (Chrome, Edge, Brave, Firefox) when the default browser holds no
+  usable Portkey session, both on the first read and after the sign-in prompt, so signing in with a
+  non-default browser works. Safari remains unsupported.
+
 ### Documentation
 
 - `docs/auth_analysis.md` now documents which browser and profile are read, that no remote debugging is used,
