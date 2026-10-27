@@ -6,6 +6,11 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/auth_analysis.md` now documents which browser and profile are read, that no remote debugging is used,
+  why failures all surface as "No cookies found", and the existing-key probe.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added
