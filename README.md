@@ -57,10 +57,24 @@ Run the checker while logged in to Portkey in Chrome, Edge, Firefox, or Brave:
 portkey-check
 ```
 
+The checker first probes the key already stored in Keychain (or `PORTKEY_API_KEY`)
+with a one-token completion against the gateway configured in the `inference`
+section of `config.json`. If the gateway accepts it, no browser session is needed.
+Use `portkey-check --force-login` to skip the probe.
+
+If the browser JWT has expired, the checker opens the configured Portkey URL in
+your default browser. Complete sign-in and MFA, return to the terminal, and press
+Enter. The checker then waits 25 seconds for browser-cookie propagation before it
+reloads the exact-domain cookies, validates the new token, and retries the API
+operation once.
+
 The active key is stored in Keychain as `PORTKEY_API_KEY`. Add shell exports as needed:
 
 ```bash
 export PORTKEY_API_KEY=$(security find-generic-password -s "PORTKEY_API_KEY" -w)
+export OPENAI_API_KEY="$PORTKEY_API_KEY"
+export ANTHROPIC_AUTH_TOKEN="$PORTKEY_API_KEY"
+export GEMINI_API_KEY="$PORTKEY_API_KEY"
 ```
 
 ## Commands
@@ -68,6 +82,7 @@ export PORTKEY_API_KEY=$(security find-generic-password -s "PORTKEY_API_KEY" -w)
 ```bash
 portkey-check              # Select newest active unexpired key, or create one if needed
 portkey-check --renew      # Force creation of a new key
+portkey-check --force-login # Skip the existing-key probe and use the browser session
 portkey-renew              # Create a new key interactively
 portkey-get-bearer         # Validate browser bearer-token extraction
 python3 main.py check      # Root dispatcher
@@ -102,7 +117,7 @@ Safari is not supported for automated cookie extraction.
 ## Troubleshooting
 
 - `No bearer token found`: sign in to Portkey in a supported browser and rerun the command.
-- `Portkey API key list failed`: verify `base_url`, `workspace_id`, and your browser session.
+- `Portkey API key list failed`: non-authentication failures still require checking `base_url` and `workspace_id`; expired authentication now starts an interactive browser login.
 - Keychain prompts: allow Terminal access to macOS Keychain.
 - Keep `config/config.json` private, for example `chmod 600 config/config.json`.
 

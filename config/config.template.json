@@ -49,5 +49,11 @@
   },
   "timeouts": {
     "api_request": 10
+  },
+  "inference": {
+    "base_url": "https://your-portkey-gateway.com/v1",
+    "chat_endpoint": "/chat/completions",
+    "model": "@your-provider/your-small-model",
+    "timeout": 20
   }
 }

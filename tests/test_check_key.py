@@ -1,75 +1,243 @@
-"""Tests for Portkey check-key orchestration."""
+"""Regression tests for Portkey browser-session refresh behavior."""
+
+import base64
+import builtins
+import json
+import sys
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from portkey_key_updater import check_key
 
 
-def test_check_current_api_key_opens_browser_when_jwt_expired(monkeypatch, capsys):
-    calls = {}
-    config = {
-        "oauth": {
-            "base_url": "https://portkey.example.com",
-            "list_api_keys_endpoint": "/albus/v2/api-keys",
-            "workspace_id": "workspace-id",
-        }
-    }
-
-    monkeypatch.setattr(check_key, "load_config", lambda: config)
-    monkeypatch.setattr(check_key, "list_api_keys", lambda *args, **kwargs: (False, [], 'HTTP 401: {"message":"jwt expired"}'))
-    monkeypatch.setattr(check_key, "open_browser", lambda url: calls.setdefault("url", url))
-
-    success, api_key = check_key.check_current_api_key("expired-token", {}, return_key=True)
-    captured = capsys.readouterr()
-
-    assert success is False
-    assert api_key is None
-    assert calls["url"] == "https://portkey.example.com"
-    assert "session token has expired" in captured.out
-    assert "wait about 20 seconds" in captured.out
+def _jwt(exp):
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": exp}).encode()).decode().rstrip("=")
+    return f"header.{payload}.signature"
 
 
-def test_extract_session_opens_supported_default_browser_when_no_cookies(monkeypatch, capsys):
-    calls = {}
-    config = {"oauth": {"base_url": "https://portkey.example.com"}}
+def test_bearer_token_is_expired_uses_jwt_expiry_without_printing_token():
+    now = datetime(2026, 9, 9, tzinfo=timezone.utc)
+
+    assert check_key.bearer_token_is_expired(_jwt(now.timestamp() - 1), now=now) is True
+    assert check_key.bearer_token_is_expired(_jwt(now.timestamp() + 1), now=now) is False
+    assert check_key.bearer_token_is_expired("opaque-token", now=now) is None
+
+
+def test_expired_jwt_refreshes_before_first_api_request(monkeypatch):
+    calls = []
+    old_token = _jwt(1)
+    fresh_token = _jwt(4_000_000_000)
+    fresh_cookies = {"auth_token": {"value": fresh_token}}
 
     monkeypatch.setattr(
         check_key,
-        "get_browser_info",
-        lambda: {"bundle_id": "com.microsoft.edgemac", "name": "Microsoft Edge"},
+        "_refresh_browser_session",
+        lambda config, browser_info, previous_token=None: (fresh_token, fresh_cookies),
     )
-    monkeypatch.setattr(check_key, "get_browser_cookies_for_domain", lambda *args, **kwargs: {})
-    monkeypatch.setattr(check_key, "open_browser", lambda url: calls.setdefault("url", url))
 
-    with pytest.raises(SystemExit) as exc_info:
-        check_key._extract_session_token_and_cookies(config)
+    def fake_list(config, token, cookies):
+        calls.append((token, cookies))
+        return True, [{"key": "pk-safe"}], None
 
-    captured = capsys.readouterr()
+    monkeypatch.setattr(check_key, "list_api_keys", fake_list)
 
-    assert exc_info.value.code == 1
-    assert calls["url"] == "https://portkey.example.com"
-    assert "I opened Portkey in Microsoft Edge" in captured.out
-    assert "wait about 20 seconds" in captured.out
+    result = check_key._validate_or_refresh_session(
+        {"oauth": {"base_url": "https://portkey.example.com"}},
+        {"bundle_id": "com.microsoft.edgemac", "name": "Edge"},
+        old_token,
+        {"auth_token": {"value": old_token}},
+    )
+
+    assert result == (True, fresh_token, fresh_cookies, [{"key": "pk-safe"}])
+    assert calls == [(fresh_token, fresh_cookies)]
 
 
-def test_extract_session_does_not_open_unsupported_default_browser_when_no_cookies(monkeypatch, capsys):
-    calls = {}
-    config = {"oauth": {"base_url": "https://portkey.example.com"}}
-
+def test_server_401_triggers_one_login_and_one_validated_retry(monkeypatch):
+    calls = []
+    fresh_cookies = {"auth_token": {"value": "fresh-token"}}
     monkeypatch.setattr(
         check_key,
-        "get_browser_info",
-        lambda: {"bundle_id": "com.apple.safari", "name": "Safari"},
+        "_refresh_browser_session",
+        lambda config, browser_info, previous_token=None: ("fresh-token", fresh_cookies),
     )
-    monkeypatch.setattr(check_key, "get_browser_cookies_for_domain", lambda *args, **kwargs: {})
-    monkeypatch.setattr(check_key, "open_browser", lambda url: calls.setdefault("url", url))
 
-    with pytest.raises(SystemExit) as exc_info:
-        check_key._extract_session_token_and_cookies(config)
+    def fake_list(config, token, cookies):
+        calls.append(token)
+        if token == "old-token":
+            return False, [], "HTTP 401 (AB05)"
+        return True, [], None
+
+    monkeypatch.setattr(check_key, "list_api_keys", fake_list)
+
+    result = check_key._validate_or_refresh_session(
+        {"oauth": {"base_url": "https://portkey.example.com"}},
+        {"bundle_id": "com.microsoft.edgemac", "name": "Edge"},
+        "old-token",
+        {"auth_token": {"value": "old-token"}},
+    )
+
+    assert result == (True, "fresh-token", fresh_cookies, [])
+    assert calls == ["old-token", "fresh-token"]
+
+
+def test_cookie_propagation_wait_enforces_25_seconds(monkeypatch, capsys):
+    sleeps = []
+    monkeypatch.setattr(check_key.time, "sleep", sleeps.append)
+
+    check_key._wait_for_cookie_propagation()
 
     captured = capsys.readouterr()
+    assert check_key.COOKIE_PROPAGATION_WAIT_SECONDS == 25
+    assert sleeps == [1] * 25
+    assert "25s" in captured.err
+    assert "wait complete" in captured.err
 
-    assert exc_info.value.code == 1
-    assert calls == {}
-    assert "Safari is not supported for automated cookie extraction" in captured.out
-    assert "Chrome, Edge, Firefox, or Brave" in captured.out
+
+def test_refresh_opens_declared_login_and_waits_for_changed_cookie(monkeypatch):
+    opened = []
+    sessions = iter(
+        [
+            ("old-token", "auth_token", {"auth_token": {"value": "old-token"}}),
+            ("fresh-token", "auth_token", {"auth_token": {"value": "fresh-token"}}),
+        ]
+    )
+    monkeypatch.setattr(check_key, "open_browser", lambda url: opened.append(url) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(check_key.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(builtins, "input", lambda prompt: "")
+    monkeypatch.setattr(check_key, "_read_browser_session", lambda *args: next(sessions))
+
+    result = check_key._refresh_browser_session(
+        {"oauth": {"base_url": "https://portkey.example.com/"}},
+        {"bundle_id": "com.microsoft.edgemac", "name": "Edge"},
+        previous_token="old-token",
+        max_attempts=2,
+        retry_delay=0,
+        cookie_wait_seconds=0,
+    )
+
+    assert result == ("fresh-token", {"auth_token": {"value": "fresh-token"}})
+    assert opened == ["https://portkey.example.com"]
+
+
+def test_non_authentication_failure_does_not_open_login(monkeypatch):
+    monkeypatch.setattr(check_key, "list_api_keys", lambda *args: (False, [], "HTTP 500"))
+    monkeypatch.setattr(
+        check_key,
+        "_refresh_browser_session",
+        lambda *args: (_ for _ in ()).throw(AssertionError("login must not open")),
+    )
+
+    result = check_key._validate_or_refresh_session(
+        {"oauth": {"base_url": "https://portkey.example.com"}},
+        {"bundle_id": "com.microsoft.edgemac", "name": "Edge"},
+        "opaque-token",
+        {"auth_token": {"value": "opaque-token"}},
+    )
+
+    assert result[0] is False
+
+
+def _stub_main_side_effects(monkeypatch, argv):
+    """Neutralize logging, Keychain writes, clipboard and env analysis around main()."""
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(check_key, "load_config", lambda: {"oauth": {"base_url": "https://portkey.example.com"}})
+    monkeypatch.setattr(check_key, "log_start", lambda *a, **k: None)
+    monkeypatch.setattr(check_key, "log_end", lambda *a, **k: None)
+    monkeypatch.setattr(check_key, "log_info", lambda *a, **k: None)
+    monkeypatch.setattr(check_key, "log_success", lambda *a, **k: None)
+    monkeypatch.setattr(check_key, "copy_to_clipboard", lambda key: True)
+    monkeypatch.setattr(check_key, "run_environment_analysis", lambda key: None)
+
+    forbidden = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("browser session must not be touched when the key already works")
+    )
+    monkeypatch.setattr(check_key, "_extract_session_token_and_cookies", forbidden)
+
+    stored = []
+    monkeypatch.setattr(check_key, "update_keychain", lambda key: stored.append(key))
+    return stored
+
+
+def test_working_key_short_circuits_before_any_browser_work(monkeypatch):
+    # The whole point: an API key lives a month, the bearer minutes. A live key must not cost a login.
+    stored = _stub_main_side_effects(monkeypatch, ["portkey-check"])
+    monkeypatch.setattr(check_key, "read_existing_api_key", lambda: ("pk-live", "Keychain service X"))
+    monkeypatch.setattr(
+        check_key, "verify_api_key_inference", lambda config, key: ("valid", "inference returned 200", None)
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        check_key.main()
+
+    assert exit_info.value.code == 0
+    assert stored == ["pk-live"]
+
+
+def test_rejected_key_falls_through_to_the_browser_path(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["portkey-check"])
+    monkeypatch.setattr(check_key, "load_config", lambda: {"oauth": {"base_url": "https://portkey.example.com"}})
+    for name in ("log_start", "log_end", "log_info", "log_success"):
+        monkeypatch.setattr(check_key, name, lambda *a, **k: None)
+    monkeypatch.setattr(check_key, "read_existing_api_key", lambda: ("pk-dead", "Keychain service X"))
+    monkeypatch.setattr(
+        check_key, "verify_api_key_inference", lambda config, key: ("unauthorized", None, "HTTP 401")
+    )
+
+    reached = []
+
+    def _browser(config):
+        reached.append("browser")
+        raise SystemExit(1)
+
+    monkeypatch.setattr(check_key, "_extract_session_token_and_cookies", _browser)
+
+    with pytest.raises(SystemExit):
+        check_key.main()
+
+    assert reached == ["browser"]
+
+
+def test_force_login_skips_the_probe_entirely(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["portkey-check", "--force-login"])
+    monkeypatch.setattr(check_key, "load_config", lambda: {"oauth": {"base_url": "https://portkey.example.com"}})
+    for name in ("log_start", "log_end", "log_info", "log_success"):
+        monkeypatch.setattr(check_key, name, lambda *a, **k: None)
+    monkeypatch.setattr(
+        check_key,
+        "verify_api_key_inference",
+        lambda *a: (_ for _ in ()).throw(AssertionError("--force-login must not probe")),
+    )
+    monkeypatch.setattr(check_key, "_extract_session_token_and_cookies", lambda config: ("t", {}, {}))
+    monkeypatch.setattr(check_key, "_validate_or_refresh_session", lambda *a: (False, None, None, None))
+
+    with pytest.raises(SystemExit):
+        check_key.main()
+
+
+def test_unreachable_gateway_keeps_the_existing_key_instead_of_forcing_mfa(monkeypatch):
+    stored = _stub_main_side_effects(monkeypatch, ["portkey-check"])
+    monkeypatch.setattr(check_key, "read_existing_api_key", lambda: ("pk-live", "Keychain service X"))
+    monkeypatch.setattr(
+        check_key, "verify_api_key_inference", lambda config, key: ("unreachable", None, "ProxyError")
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        check_key.main()
+
+    assert exit_info.value.code == 0
+    assert stored == ["pk-live"]
+
+
+def test_probe_never_prints_the_api_key(monkeypatch, capsys):
+    monkeypatch.setattr(check_key, "read_existing_api_key", lambda: ("pk-secret-value-1234", "Keychain"))
+    monkeypatch.setattr(check_key, "log_success", lambda *a, **k: None)
+    monkeypatch.setattr(
+        check_key, "verify_api_key_inference", lambda config, key: ("valid", "inference returned 200", None)
+    )
+
+    check_key.probe_existing_api_key({})
+    captured = capsys.readouterr()
+
+    assert "pk-secret-value-1234" not in captured.out + captured.err

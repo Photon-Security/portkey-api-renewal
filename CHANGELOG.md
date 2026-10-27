@@ -6,8 +6,42 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+### Added
+
 - Added README platform/version badges for macOS, zsh, Python, Portkey, checks, and releases.
 - Added GitHub Actions workflows for changelog validation and tag-based GitHub releases.
+- `verify_api_key_inference()` in `portkey_api.py` — proves an API key is still good by spending it on a
+  one-token completion against the inference gateway configured in `inference.base_url`, returning a three-state
+  result: `valid`, `unauthorized`, or `unreachable`.
+- `inference_settings()` resolving the probe's base URL, endpoint, model and timeout from
+  `config.json` → `$AIPE_API_BASE` → built-in defaults, plus a new `inference` section in
+  `config/config.json` and `config/config.template.json`.
+- `read_existing_api_key()` and `probe_existing_api_key()` in `check_key.py`, reading the key already on
+  the machine from the Keychain (service `PORTKEY_API_KEY`) or the environment.
+- `--force-login` flag to skip the probe and go straight to the browser session.
+
+### Changed
+
+- **`portkey-check` no longer opens a browser to answer a question inference can answer in a second.**
+  Keys are minted on the dashboard (bearer auth, expires in minutes) but spent on
+  the gateway (`x-portkey-api-key`, valid about a month). The old flow inferred the
+  key's health from the bearer's, so an expired bearer triggered an interactive MFA login even when the
+  key was good for weeks. `main()` now probes the existing key before any cookie or bearer work and
+  exits successfully when it passes: ~1 second and no MFA, against ~33 seconds plus a login and a
+  25-second cookie wait.
+- Only an *authentication* failure counts as a dead key. Any other gateway answer proves the key got
+  past auth and needs no renewal — a retired model, for instance, replies `HTTP 404`.
+- An unreachable gateway keeps the existing key and warns about the proxy/VPN rather than forcing a
+  login, since forcing one there would repeat the waste the probe exists to avoid.
+
+### Fixed
+
+- Browser cookie matching now accepts only the exact host or its parent domains, rejecting lookalike hosts.
+- The bearer token is no longer printed, even obfuscated.
+- The probe omits `x-portkey-config`, which the discovery endpoint requires but `/chat/completions`
+  rejects with `HTTP 400 Invalid config passed`. Pinned by a test.
+- The API key never reaches stdout, stderr or the returned detail strings — only `obfuscate_key()`
+  output and `_response_error()` descriptions. Also pinned by a test.
 
 ## [1.0.0] - 2026-03-24
 

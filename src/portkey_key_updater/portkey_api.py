@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import requests
 
 from .utils import obfuscate_key
+
+
+# The inference gateway is a different host from the renewal dashboard: keys are minted on
+# portkey.example.com but spent on gateway.example.com. An API key lives about a month, while the
+# dashboard bearer expires in minutes, so the key can be proven good long after the bearer dies.
+INFERENCE_DEFAULTS = {
+    "base_url": "https://gateway.example.com/v1",
+    "chat_endpoint": "/chat/completions",
+    "model": "@your-provider/your-small-model",
+    "timeout": 20,
+}
 
 
 def _request_cookies(cookies: dict) -> dict:
@@ -26,6 +39,88 @@ def _url(config: dict, endpoint_key: str, query: dict | None = None) -> str:
     if query:
         url = f"{url}?{urlencode(query)}"
     return url
+
+
+def _response_error(response) -> str:
+    """Return an HTTP error description without echoing an untrusted response body."""
+    error_code = None
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            candidate = data.get("errorCode") if isinstance(data, dict) else None
+            if (
+                isinstance(candidate, str)
+                and 1 <= len(candidate) <= 20
+                and all(character.isalnum() or character in "_-" for character in candidate)
+            ):
+                error_code = candidate
+    except (TypeError, ValueError):
+        pass
+
+    suffix = f" ({error_code})" if error_code else ""
+    return f"HTTP {response.status_code}{suffix}"
+
+
+def is_authentication_error(error: str | None) -> bool:
+    """Return whether a sanitised Portkey error requires a fresh browser login."""
+    if not error:
+        return False
+    return error.startswith(("HTTP 401", "HTTP 403")) or "(AB05)" in error
+
+
+def inference_settings(config: dict) -> dict:
+    """Resolve inference-probe settings from config, then environment, then defaults."""
+    configured = config.get("inference") or {}
+    settings = dict(INFERENCE_DEFAULTS)
+    settings.update({key: value for key, value in configured.items() if value})
+    if not configured.get("base_url"):
+        env_base = os.getenv("AIPE_API_BASE", "").strip()
+        if env_base:
+            settings["base_url"] = env_base
+    return settings
+
+
+def verify_api_key_inference(config: dict, api_key: str) -> tuple[str, str | None, str | None]:
+    """Prove an API key still works by spending it on a one-token completion.
+
+    Returns (status, detail, error) where status is:
+      'valid'        - the key authenticated; detail says whether inference itself ran
+      'unauthorized' - the gateway rejected the key, so it must be renewed
+      'unreachable'  - the gateway could not be reached, so the key is unproven either way
+    """
+    settings = inference_settings(config)
+    url = f"{settings['base_url'].rstrip('/')}{settings['chat_endpoint']}"
+    payload = {
+        "model": settings["model"],
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    }
+    # Deliberately not build_headers(): that shapes a browser request for the dashboard and
+    # carries a bearer. The gateway wants the API key only. An empty x-portkey-config is also
+    # rejected here with HTTP 400 even though discovery requires it, so it is omitted.
+    headers = {
+        "x-portkey-api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    started = time.monotonic()
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=settings["timeout"])
+    except requests.RequestException as exc:
+        return "unreachable", None, type(exc).__name__
+
+    elapsed = time.monotonic() - started
+    if response.status_code == 200:
+        return "valid", f"inference returned 200 in {elapsed:.2f}s on {settings['model']}", None
+
+    error = _response_error(response)
+    if is_authentication_error(error) or response.status_code == 401:
+        return "unauthorized", None, error
+    # Any non-auth answer still proves the key got past authentication - a retired model, for
+    # instance, answers HTTP 404. That is enough to know the key does not need renewing.
+    return "valid", f"authenticated ({error}); model did not complete", None
 
 
 def build_headers(config: dict, bearer_token: str, include_content_type: bool = False) -> dict:
@@ -80,9 +175,10 @@ def list_api_keys(config: dict, bearer_token: str, cookies: dict) -> tuple[bool,
         headers=build_headers(config, bearer_token),
         cookies=_request_cookies(cookies),
         timeout=config["timeouts"]["api_request"],
+        allow_redirects=False,
     )
     if response.status_code != 200:
-        return False, [], f"HTTP {response.status_code}: {response.text[:500]}"
+        return False, [], _response_error(response)
     data = response.json()
     keys = data.get("data", [])
     if not isinstance(keys, list):
@@ -114,9 +210,10 @@ def create_api_key(config: dict, bearer_token: str, cookies: dict) -> tuple[bool
         headers=build_headers(config, bearer_token, include_content_type=True),
         cookies=_request_cookies(cookies),
         timeout=config["timeouts"]["api_request"],
+        allow_redirects=False,
     )
     if response.status_code not in (200, 201):
-        return False, None, f"HTTP {response.status_code}: {response.text[:500]}"
+        return False, None, _response_error(response)
     data = response.json()
     api_key = data.get("key")
     if not api_key:

@@ -85,13 +85,15 @@ def extract_cookies_from_jar(cookie_jar, domain):
     """Extract and filter cookies from a cookie jar"""
     cookies = {}
     cookie_names = []
+    request_host = domain.lower().lstrip('.')
     
     for cookie in cookie_jar:
-        # Check if cookie belongs to our domain
-        if (domain in cookie.domain or
-            cookie.domain.endswith(f'.{domain}') or
-            cookie.domain.startswith(f'.{domain}') or
-            cookie.domain == domain):
+        cookie_domain = cookie.domain.lower().lstrip('.')
+        cookie_applies_to_host = (
+            request_host == cookie_domain
+            or request_host.endswith(f'.{cookie_domain}')
+        )
+        if cookie_applies_to_host:
             
             cookies[cookie.name] = {
                 'value': cookie.value,
@@ -109,14 +111,6 @@ def extract_cookies_from_jar(cookie_jar, domain):
     
     return cookies
 
-def obfuscate_token(token):
-    """Obfuscate the middle portion of a token with fewer asterisks"""
-    if len(token) < 12:
-        return token[:2] + "***" + token[-2:]
-    
-    # Keep only first 4 chars and last 4 chars for better security
-    return token[:4] + "***" + token[-4:]
-
 def test_api_key_with_cookies(cookies, config):
     """Test that the extracted bearer token can list Portkey API keys."""
     final_token, cookie_name = extract_bearer_token_from_cookies(cookies)
@@ -125,7 +119,7 @@ def test_api_key_with_cookies(cookies, config):
         log_error("No bearer token cookie found")
         return False
 
-    print(f" Found bearer token in cookie '{cookie_name}': {obfuscate_token(final_token)}", file=sys.stderr)
+    print(f" Found bearer token in cookie '{cookie_name}'", file=sys.stderr)
     
     try:
         print(" Testing bearer token with Portkey key list request", file=sys.stderr)
