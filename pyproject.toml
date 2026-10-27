@@ -1,6 +1,6 @@
 [project]
 name = "portkey-renew-api-key"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Portkey API Key Updater"
 authors = [
     {name = "Florian Bidabe", email = "florian@photonsec.com.au"}
@@ -38,6 +38,9 @@ generate-report = "portkey_key_updater.report:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/portkey_key_updater/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/portkey_key_updater"]

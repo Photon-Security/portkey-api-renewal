@@ -125,6 +125,10 @@ Safari is not supported for automated cookie extraction.
   <img src="assets/Portkey_API_Banner.png" alt="Portkey API Key Updater Banner" />
 </p>
 
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/). The version lives in `src/portkey_key_updater/__init__.py`, is shown with `portkey-check --version` or `python3 main.py --version`, and each release is documented in [CHANGELOG.md](CHANGELOG.md). Tagging `vX.Y.Z` triggers the GitHub release workflow.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).

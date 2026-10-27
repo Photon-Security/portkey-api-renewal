@@ -6,8 +6,12 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-27
+
 ### Added
 
+- Single-source versioning: `__version__` in `src/portkey_key_updater/__init__.py` feeds the package metadata
+  (hatch dynamic version), and `--version` is available on `main.py` and `portkey-check`.
 - Added README platform/version badges for macOS, zsh, Python, Portkey, checks, and releases.
 - Added GitHub Actions workflows for changelog validation and tag-based GitHub releases.
 - `verify_api_key_inference()` in `portkey_api.py` — proves an API key is still good by spending it on a

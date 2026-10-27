@@ -88,3 +88,21 @@ def test_core_modules_exist_in_src_package():
     }
 
     assert expected_modules.issubset({path.name for path in package_dir.glob("*.py")})
+
+
+def test_package_version_is_single_sourced_and_matches_changelog():
+    """pyproject must read its version from the package, and the changelog must document it."""
+    import re
+
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text()
+    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text()
+
+    assert 'dynamic = ["version"]' in pyproject
+    assert re.fullmatch(r"\d+\.\d+\.\d+", __import__("portkey_key_updater").__version__)
+    assert f"## [{__import__('portkey_key_updater').__version__}] - " in changelog
+
+
+def test_license_file_is_mit():
+    """The repository should ship the MIT license it declares in pyproject.toml."""
+    assert (PROJECT_ROOT / "LICENSE").read_text().startswith("MIT License")
+    assert 'license = { text = "MIT" }' in (PROJECT_ROOT / "pyproject.toml").read_text()
