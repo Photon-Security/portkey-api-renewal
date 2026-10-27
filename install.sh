@@ -57,8 +57,10 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="$HOME/Applications/Portkey-API-renewal"
-GITHUB_ZIP_URL="https://github.com/Enelass/portkey-api-renewal/archive/refs/heads/main.zip"
+INSTALL_DIR="${PORTKEY_INSTALL_DIR:-$HOME/Applications/Portkey-API-renewal}"
+GITHUB_ZIP_URL="${PORTKEY_ZIP_URL:-https://github.com/Enelass/portkey-api-renewal/archive/refs/heads/main.zip}"
+# Paths owned by the user: never overwritten or deleted by an update.
+PRESERVE_PATHS=("config/config.json" "logs" ".venv" "dontsync")
 REQUIRED_FILES=("pyproject.toml" "src/portkey_key_updater/check_key.py" "src/portkey_key_updater/get_bearer.py" "src/portkey_key_updater/renew_key.py" "src/portkey_key_updater/utils.py")
 
 # Functions
@@ -114,155 +116,139 @@ check_installation_files_exist() {
     fi
 }
 
-download_and_extract() {
-    print_info "Downloading from GitHub..."
-    
-    # Create Applications directory if it doesn't exist
-    mkdir -p "$HOME/Applications"
-    
-    # Create temporary directory for download
-    local temp_dir=$(mktemp -d)
-    local zip_file="$temp_dir/portkey-api-renewal.zip"
-    
-    print_info "Downloading to $temp_dir"
-    
-    if curl -L -o "$zip_file" "$GITHUB_ZIP_URL"; then
-        print_success "Download completed"
-    else
-        print_error "Failed to download from GitHub"
-        rm -rf "$temp_dir"
+installed_version() {
+    # Prints the version declared by a source tree, or "unknown" for installs that predate __version__.
+    local init_file="$1/src/portkey_key_updater/__init__.py"
+    local version=""
+    if [[ -f "$init_file" ]]; then
+        version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$init_file" | head -1)
+    fi
+    echo "${version:-unknown}"
+}
+
+fetch_latest_source() {
+    # Downloads and extracts the latest source; prints the extracted directory. Sets FETCH_TMP for cleanup.
+    FETCH_TMP=$(mktemp -d)
+    local zip_file="$FETCH_TMP/portkey-api-renewal.zip"
+
+    print_info "Downloading from GitHub..." >&2
+    if ! curl -fsSL -o "$zip_file" "$GITHUB_ZIP_URL"; then
+        print_error "Failed to download $GITHUB_ZIP_URL" >&2
+        rm -rf "$FETCH_TMP"
         return 1
     fi
-    
-    print_info "Extracting archive..."
-    
-    # Extract to temp directory first
-    if unzip -q "$zip_file" -d "$temp_dir"; then
-        print_success "Archive extracted"
-    else
-        print_error "Failed to extract archive"
-        rm -rf "$temp_dir"
+    if ! unzip -q "$zip_file" -d "$FETCH_TMP/src"; then
+        print_error "Failed to extract archive" >&2
+        rm -rf "$FETCH_TMP"
         return 1
     fi
-    
-    # Find the extracted directory (usually has -main suffix)
-    local extracted_dir=$(find "$temp_dir" -type d -name "*portkey-api-renewal*" | head -1)
-    
-    if [[ -z "$extracted_dir" ]]; then
-        print_error "Could not find extracted directory"
-        rm -rf "$temp_dir"
+
+    local extracted_dir
+    extracted_dir=$(find "$FETCH_TMP/src" -mindepth 1 -maxdepth 1 -type d | head -1)
+    if [[ -z "$extracted_dir" || ! -f "$extracted_dir/pyproject.toml" ]]; then
+        print_error "Downloaded archive does not look like the Portkey key updater" >&2
+        rm -rf "$FETCH_TMP"
         return 1
     fi
-    
-    # Move to final location
-    if [[ -d "$INSTALL_DIR" ]]; then
-        print_warning "Removing existing installation"
-        rm -rf "$INSTALL_DIR"
-    fi
-    
-    mv "$extracted_dir" "$INSTALL_DIR"
-    rm -rf "$temp_dir"
-    
-    print_success "Installation files extracted to $INSTALL_DIR"
-    return 0
+    echo "$extracted_dir"
+}
+
+sync_source() {
+    # Copies a fresh source tree over INSTALL_DIR, keeping user-owned paths and removing obsolete files.
+    local source_dir="$1"
+    local rsync_args=(-a --delete)
+    local preserved   # not "path": in zsh that name is tied to $PATH
+    for preserved in "${PRESERVE_PATHS[@]}"; do
+        rsync_args+=(--exclude "/$preserved")
+    done
+    mkdir -p "$INSTALL_DIR"
+    rsync "${rsync_args[@]}" "$source_dir/" "$INSTALL_DIR/"
+}
+
+virtual_environment_is_healthy() {
+    [[ -x "$INSTALL_DIR/.venv/bin/python" ]] && "$INSTALL_DIR/.venv/bin/python" -c "import sys" >/dev/null 2>&1
 }
 
 setup_virtual_environment() {
     print_info "Setting up virtual environment with uv..."
-    
-    # Check if uv is installed
+
     if ! check_command "uv"; then
         print_error "uv is required but not installed"
         print_info "Install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh"
         return 1
     fi
-    
-    # Change to project directory
+
     cd "$INSTALL_DIR"
-    
-    # Check if pyproject.toml exists
-    if [[ ! -f "pyproject.toml" ]]; then
-        print_error "pyproject.toml not found in $INSTALL_DIR"
-        return 1
+
+    if ! virtual_environment_is_healthy; then
+        # Missing, or broken because the interpreter it points at moved or was removed.
+        rm -rf "$INSTALL_DIR/.venv"
+        print_info "Creating virtual environment with Python 3.12..."
+        if ! uv venv --python 3.12; then
+            print_error "Failed to create virtual environment with Python 3.12"
+            print_info "Ensure Python 3.12 is installed on your system"
+            return 1
+        fi
     fi
-    
-    print_info "Creating virtual environment with Python 3.12..."
-    if uv venv --python 3.12; then
-        print_success "Virtual environment created with Python 3.12"
-    else
-        print_error "Failed to create virtual environment with Python 3.12"
-        print_info "Ensure Python 3.12 is installed on your system"
-        return 1
-    fi
-    
+
     print_info "Installing package and dependencies..."
-    if uv pip install -e .; then
-        print_success "Package and dependencies installed"
-    else
+    if ! uv pip install --python "$INSTALL_DIR/.venv/bin/python" -e .; then
         print_error "Failed to install package dependencies"
         return 1
     fi
-    
-    print_success "Virtual environment setup complete"
+
+    print_success "Virtual environment ready"
     print_info "To activate: source $INSTALL_DIR/.venv/bin/activate"
     return 0
 }
 
-# Main execution
+# Main execution: first install and update are the same path.
 main() {
     print_info "Portkey Key Updater Installation Script"
     print_info "======================================="
-    
-    # Check if directory exists and has required files
+
+    check_command curl || exit 1
+    check_command unzip || exit 1
+    check_command rsync || exit 1
+
+    local previous_version="not installed"
     if check_directory_exists && check_installation_files_exist; then
-        print_success "Installation already exists and appears complete"
-        print_info "Location: $INSTALL_DIR"
-        
-        # Still check/setup virtual environment
-        if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
-            print_info "Virtual environment not found, setting up..."
-            if ! setup_virtual_environment; then
-                exit 1
-            fi
-        else
-            print_success "Virtual environment already exists"
-        fi
-        
-        print_success "Installation check complete"
-        return 0
+        previous_version=$(installed_version "$INSTALL_DIR")
+        print_info "Existing installation found (version: $previous_version), checking for updates"
+    else
+        print_info "No complete installation found, installing"
     fi
-    
-    # Need to download and install
-    print_info "Installation not found or incomplete, downloading..."
-    
-    # Check required tools
-    if ! check_command "curl"; then
+
+    local source_dir
+    source_dir=$(fetch_latest_source) || exit 1
+    local latest_version
+    latest_version=$(installed_version "$source_dir")
+
+    if ! sync_source "$source_dir"; then
+        print_error "Failed to copy files into $INSTALL_DIR"
+        rm -rf "$FETCH_TMP"
         exit 1
     fi
-    
-    if ! check_command "unzip"; then
-        exit 1
-    fi
-    
-    # Download and extract
-    if ! download_and_extract; then
-        exit 1
-    fi
-    
-    # Verify files after extraction
+    rm -rf "$FETCH_TMP"
+
     if ! check_installation_files_exist; then
         print_error "Installation incomplete - some required files are still missing"
         exit 1
     fi
-    
-    # Setup virtual environment
+
     if ! setup_virtual_environment; then
         exit 1
     fi
-    
-    print_success "Installation completed successfully!"
+
+    if [[ "$previous_version" == "not installed" ]]; then
+        print_success "Installed version $latest_version"
+    elif [[ "$previous_version" == "$latest_version" ]]; then
+        print_success "Already on version $latest_version (files refreshed)"
+    else
+        print_success "Updated $previous_version -> $latest_version"
+    fi
     print_info "Location: $INSTALL_DIR"
-    print_info "To use: cd $INSTALL_DIR && source .venv/bin/activate"
+    print_info "Your config/config.json and logs/ were left untouched"
 }
 
 # Daemon management functions

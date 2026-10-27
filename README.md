@@ -77,6 +77,14 @@ export ANTHROPIC_AUTH_TOKEN="$PORTKEY_API_KEY"
 export GEMINI_API_KEY="$PORTKEY_API_KEY"
 ```
 
+### Updating
+
+Re-run the installer to update. It is safe on a fresh machine and on an existing install: it refreshes the code and dependencies, and leaves `config/config.json` and `logs/` untouched. Settings added to `config/config.template.json` in newer versions must be merged into your `config.json` by hand.
+
+```bash
+zsh <(curl -fsSL https://raw.githubusercontent.com/Enelass/portkey-api-renewal/refs/heads/main/install.sh)
+```
+
 ## Commands
 
 ```bash

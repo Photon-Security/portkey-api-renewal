@@ -12,6 +12,15 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
   usable Portkey session, both on the first read and after the sign-in prompt, so signing in with a
   non-default browser works. Safari remains unsupported.
 
+### Changed
+
+- `install.sh` now handles first install and update in one path. It downloads the latest source, refreshes
+  the code with `rsync --delete` (removing obsolete files), and keeps `config/config.json`, `logs/`,
+  `.venv` and `dontsync/`. A broken virtual environment is rebuilt. It reports `installed`, `updated X -> Y`
+  or `already on X`. Previously an existing install was never updated.
+- A failed download aborts before anything in the install directory is touched.
+- `PORTKEY_INSTALL_DIR` and `PORTKEY_ZIP_URL` override the install location and download URL (for testing).
+
 ### Documentation
 
 - `docs/auth_analysis.md` now documents which browser and profile are read, that no remote debugging is used,
