@@ -121,6 +121,29 @@ def test_refresh_opens_declared_login_and_waits_for_changed_cookie(monkeypatch):
     assert opened == ["https://portkey.example.com"]
 
 
+@pytest.mark.parametrize("cookies", [{}, {"AWSALB": {"value": "opaque"}, "AWSALBCORS": {"value": "opaque"}}])
+def test_no_bearer_opens_control_plane_and_validates_new_session(monkeypatch, cookies):
+    config = {"oauth": {"base_url": "https://llmgateway.genai.cba"}}
+    browser = {"bundle_id": "com.microsoft.edgemac", "name": "Microsoft Edge"}
+    opened = []
+    calls = []
+    refreshed_cookies = {"auth_token": {"value": "fresh-token"}}
+    monkeypatch.setattr(check_key, "get_browser_info", lambda: browser)
+    monkeypatch.setattr(check_key, "_find_session_in_other_browsers", lambda *_: None)
+    monkeypatch.setattr(check_key, "open_browser", lambda url: opened.append(url) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(check_key.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(builtins, "input", lambda prompt: "")
+    monkeypatch.setattr(check_key, "_wait_for_cookie_propagation", lambda *_: None)
+    monkeypatch.setattr(check_key, "_read_browser_session", lambda *_: ("fresh-token", "auth_token", refreshed_cookies) if opened else (None, None, cookies))
+    monkeypatch.setattr(check_key, "list_api_keys", lambda *args: calls.append(args) or (True, [], None))
+    token, initial_cookies, info = check_key._extract_session_token_and_cookies(config)
+    assert token is None and initial_cookies == cookies and info == browser
+    result = check_key._validate_or_refresh_session(config, info, token, initial_cookies)
+    assert opened == ["https://llmgateway.genai.cba"]
+    assert result == (True, "fresh-token", refreshed_cookies, [])
+    assert len(calls) == 1 and calls[0][1] == "fresh-token"
+
+
 def test_non_authentication_failure_does_not_open_login(monkeypatch):
     monkeypatch.setattr(check_key, "list_api_keys", lambda *args: (False, [], "HTTP 500"))
     monkeypatch.setattr(

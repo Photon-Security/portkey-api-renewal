@@ -181,7 +181,7 @@ def _refresh_browser_session(
         return None
 
     colored_print(
-        f"[AUTH] Your Portkey browser session is expired. I opened {login_url} in {browser_name}.",
+        f"[AUTH] Your Portkey browser session is missing or expired. I opened {login_url} in {browser_name}.",
         Colors.YELLOW,
     )
     colored_print("[AUTH] Complete sign-in and MFA, then return here.", Colors.YELLOW)
@@ -225,7 +225,7 @@ def _validate_or_refresh_session(config, browser_info, token_value, cookies):
     keys = None
     error = None
 
-    if bearer_token_is_expired(token_value) is not True:
+    if token_value and bearer_token_is_expired(token_value) is not True:
         try:
             success, keys, error = list_api_keys(config, token_value, cookies)
         except Exception as exc:
@@ -452,19 +452,13 @@ def _extract_session_token_and_cookies(config):
             token_value, cookies = other_session
             token_cookie_name = extract_bearer_token_from_cookies(cookies)[1]
 
-    if not cookies:
-        colored_print("[ERROR] No cookies found in browser session", Colors.RED)
-        log_error("No cookies found in browser session")
-        handle_missing_browser_session(config, browser_info)
-        sys.exit(1)
-
-    colored_print(f"[INFO] Found cookies: {', '.join(sorted(cookies))}", Colors.CYAN)
+    if cookies:
+        colored_print(f"[INFO] Found cookies: {', '.join(sorted(cookies))}", Colors.CYAN)
+    else:
+        colored_print("[INFO] No cookies found for the configured control plane", Colors.YELLOW)
     if not token_value:
-        colored_print("[ERROR] No bearer token found in cookies", Colors.RED)
-        log_error("No bearer token found in cookies")
-        colored_print("[INFO] Expected one of: token, auth_token, access_token, id_token", Colors.YELLOW)
-        colored_print("[INFO] Please make sure you're logged in and authenticated", Colors.YELLOW)
-        sys.exit(1)
+        colored_print("[AUTH] No bearer token found; browser sign-in is required.", Colors.YELLOW)
+        return None, cookies, browser_info
 
     timestamp_print(
         f"[SUCCESS] Found bearer token in {browser_info.get('name', 'browser')} cookie '{token_cookie_name}'",
