@@ -59,8 +59,9 @@ NC='\033[0m' # No Color
 # Configuration
 INSTALL_DIR="${PORTKEY_INSTALL_DIR:-$HOME/Applications/Portkey-API-renewal}"
 GITHUB_ZIP_URL="${PORTKEY_ZIP_URL:-https://github.com/Photon-Security/portkey-api-renewal/archive/refs/heads/main.zip}"
-# Paths owned by the user: never overwritten or deleted by an update.
-PRESERVE_PATHS=("config/config.json" "logs" ".venv" "dontsync")
+# The config is replaced only after source sync and dependency installation succeed.
+# PORTKEY_CONFIG_OVERRIDES_V1: wrapper-to-installer configuration contract.
+PRESERVE_PATHS=("config/config.json" "config/config.json.backup.*" "logs" ".venv" "dontsync")
 REQUIRED_FILES=("pyproject.toml" "src/portkey_key_updater/check_key.py" "src/portkey_key_updater/get_bearer.py" "src/portkey_key_updater/renew_key.py" "src/portkey_key_updater/utils.py")
 
 # Functions
@@ -127,7 +128,7 @@ installed_version() {
 }
 
 fetch_latest_source() {
-    # Downloads and extracts the latest source; prints the extracted directory. Sets FETCH_TMP for cleanup.
+    # Downloads and extracts the latest source; sets FETCH_SOURCE and FETCH_TMP for cleanup.
     FETCH_TMP=$(mktemp -d)
     local zip_file="$FETCH_TMP/portkey-api-renewal.zip"
 
@@ -150,7 +151,7 @@ fetch_latest_source() {
         rm -rf "$FETCH_TMP"
         return 1
     fi
-    echo "$extracted_dir"
+    FETCH_SOURCE="$extracted_dir"
 }
 
 sync_source() {
@@ -202,6 +203,93 @@ setup_virtual_environment() {
     return 0
 }
 
+# Prepare a complete config before touching the existing one. The template is from
+# the freshly synced source tree; old config values are never merged into it.
+replace_config() {
+    local config_dir="$INSTALL_DIR/config"
+    local config_file="$config_dir/config.json"
+    local template="$config_dir/config.template.json"
+    local candidate backup=""
+    if [[ ! -f "$template" || -L "$template" ]]; then
+        print_error "Missing or unsafe config template: $template"
+        return 1
+    fi
+    if [[ -e "$config_file" && ! -f "$config_file" || -L "$config_file" ]]; then
+        print_error "Config path is not a regular file: $config_file"
+        return 1
+    fi
+    candidate=$(umask 077; mktemp "$config_dir/.config.json.tmp.XXXXXXXX") || {
+        print_error "Failed to create temporary config"
+        return 1
+    }
+    if ! python3 - "$template" "$candidate" <<'PYCONFIG'
+import json
+import os
+import sys
+
+names = {
+    "PORTKEY_OAUTH_BASE": ("oauth", "base_url"),
+    "PORTKEY_OAUTH_WORKSPACE_ID": ("oauth", "workspace_id"),
+    "PORTKEY_OAUTH_ORGANISATION_ID": ("oauth", "organisation_id"),
+    "PORTKEY_OAUTH_KEY_NAME": ("oauth", "key_name"),
+    "PORTKEY_INFERENCE_BASE": ("inference", "base_url"),
+    "PORTKEY_INFERENCE_MODEL": ("inference", "model"),
+}
+try:
+    values = {name: os.environ.get(name) for name in names}
+    if any(value is not None for value in values.values()):
+        if any(not value for value in values.values()):
+            raise ValueError("gateway settings must contain all six nonempty values")
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source)
+    if not isinstance(config, dict) or any(
+        not isinstance(config.get(section), dict) for section in ("oauth", "inference")
+    ):
+        raise ValueError("config template needs oauth and inference objects")
+    for name, value in values.items():
+        if value is not None:
+            section, field = names[name]
+            config[section][field] = value
+    with open(sys.argv[2], "w", encoding="utf-8") as output:
+        json.dump(config, output, indent=2)
+        output.write("\n")
+except (OSError, ValueError, TypeError) as exc:
+    print(f"Cannot prepare config: {exc}", file=sys.stderr)
+    sys.exit(1)
+PYCONFIG
+    then
+        rm -f "$candidate"
+        print_error "Existing config was preserved"
+        return 1
+    fi
+    if ! chmod 600 "$candidate"; then
+        rm -f "$candidate"
+        print_error "Failed to secure temporary config; existing config was preserved"
+        return 1
+    fi
+    if [[ -e "$config_file" ]]; then
+        backup=$(umask 077; mktemp "$config_dir/config.json.backup.XXXXXXXX") || {
+            rm -f "$candidate"
+            print_error "Failed to reserve a unique config backup path"
+            return 1
+        }
+        if ! cp "$config_file" "$backup" || ! chmod 600 "$backup"; then
+            rm -f "$candidate" "$backup"
+            print_error "Failed to back up config; existing config was preserved"
+            return 1
+        fi
+    fi
+    if ! mv -f "$candidate" "$config_file"; then
+        rm -f "$candidate"
+        print_error "Failed to replace config; existing config was preserved"
+        [[ -n "$backup" ]] && print_info "Config backup: $backup"
+        return 1
+    fi
+    [[ -n "$backup" ]] && print_info "Config backup: $backup"
+    print_info "Replaced config/config.json from the freshly installed template"
+    return 0
+}
+
 # Main execution: first install and update are the same path.
 main() {
     print_info "Portkey Key Updater Installation Script"
@@ -220,7 +308,8 @@ main() {
     fi
 
     local source_dir
-    source_dir=$(fetch_latest_source) || exit 1
+    fetch_latest_source || exit 1
+    source_dir="$FETCH_SOURCE"
     local latest_version
     latest_version=$(installed_version "$source_dir")
 
@@ -240,6 +329,10 @@ main() {
         exit 1
     fi
 
+    if ! replace_config; then
+        exit 1
+    fi
+
     if [[ "$previous_version" == "not installed" ]]; then
         print_success "Installed version $latest_version"
     elif [[ "$previous_version" == "$latest_version" ]]; then
@@ -248,7 +341,7 @@ main() {
         print_success "Updated $previous_version -> $latest_version"
     fi
     print_info "Location: $INSTALL_DIR"
-    print_info "Your config/config.json and logs/ were left untouched"
+    print_info "Your logs/ were left untouched"
 }
 
 # Daemon management functions

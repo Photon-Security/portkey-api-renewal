@@ -79,7 +79,7 @@ export GEMINI_API_KEY="$PORTKEY_API_KEY"
 
 ### Updating
 
-Re-run the installer to update. It is safe on a fresh machine and on an existing install: it refreshes the code and dependencies, and leaves `config/config.json` and `logs/` untouched. Settings added to `config/config.template.json` in newer versions must be merged into your `config.json` by hand.
+Re-run the installer to update. It refreshes the code and dependencies, backs up any existing `config/config.json` to a unique `config/config.json.backup.*` file, and replaces the config from the newly installed template. Existing config values are not merged into the replacement. The installer leaves `logs/` untouched. Gateway-specific settings can be supplied using all six `PORTKEY_OAUTH_BASE`, `PORTKEY_OAUTH_WORKSPACE_ID`, `PORTKEY_OAUTH_ORGANISATION_ID`, `PORTKEY_OAUTH_KEY_NAME`, `PORTKEY_INFERENCE_BASE`, and `PORTKEY_INFERENCE_MODEL` environment variables; otherwise edit the replacement config before using it. Backups are retained across updates.
 
 ```bash
 zsh <(curl -fsSL https://raw.githubusercontent.com/Photon-Security/portkey-api-renewal/refs/heads/main/install.sh)
