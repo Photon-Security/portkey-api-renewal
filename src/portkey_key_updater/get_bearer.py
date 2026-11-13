@@ -7,8 +7,11 @@ Includes interactive authentication flow when no cookies are found
 
 import sys
 import os
-import json
 import argparse
+import json
+import base64
+import binascii
+from pathlib import Path
 from contextlib import redirect_stderr
 
 import browser_cookie3
@@ -34,53 +37,110 @@ def extract_bearer_token_from_cookies(cookies):
     return None, None
 
 
-def get_browser_cookies_for_domain(browser_id, domain):
-    """Extract cookies from the default browser using browser-cookie3 with fallbacks"""
-    
-    # Map browser IDs to browser-cookie3 functions (Safari excluded due to sandboxing)
+CHROMIUM_PROFILE_ROOTS = {
+    "com.google.chrome": ("Google/Chrome", "Google/Chrome Beta", "Google/Chrome Dev"),
+    "com.microsoft.edgemac": ("Microsoft Edge", "Microsoft Edge Beta", "Microsoft Edge Dev", "Microsoft Edge Canary"),
+    "com.brave.Browser": ("BraveSoftware/Brave-Browser",),
+    "com.brave.browser": ("BraveSoftware/Brave-Browser",),
+}
+
+
+def _cookie_files(browser_id):
+    """Discover macOS Chromium profiles without reading any cookie values."""
+    if sys.platform != "darwin" or browser_id not in CHROMIUM_PROFILE_ROOTS:
+        return [None]  # Let the library discover Firefox/non-macOS stores.
+    files = []
+    for folder in CHROMIUM_PROFILE_ROOTS[browser_id]:
+        root = Path.home() / "Library/Application Support" / folder
+        for pattern in ("Default/Network/Cookies", "Default/Cookies",
+                        "Profile */Network/Cookies", "Profile */Cookies"):
+            files.extend(sorted(path for path in root.glob(pattern) if path.is_file()))
+    return files
+
+
+def _token_expiry(token):
+    """Read JWT expiry only as a selection hint; server validation remains required."""
+    try:
+        payload = token.split(".", 2)[1]
+        payload += "=" * (-len(payload) % 4)
+        return float(json.loads(base64.urlsafe_b64decode(payload))["exp"])
+    except (IndexError, KeyError, TypeError, ValueError, binascii.Error, UnicodeDecodeError):
+        return None
+
+
+def _session_rank(cookies):
+    token, _ = extract_bearer_token_from_cookies(cookies)
+    if not token:
+        return (0, 0)
+    expiry = _token_expiry(token)
+    if expiry is not None and expiry <= time.time():
+        return (1, expiry)
+    return (2, expiry or 0)
+
+
+def _cookie_read_warning(browser_id, path, exc):
+    """Report actionable categories, never exception bodies or cookie values."""
+    if "decrypt" in str(exc).lower():
+        reason = ("Cookie decryption failed. Allow this Python installation to access the "
+                  "browser's Safe Storage item in Keychain; check that the login Keychain is unlocked.")
+    elif isinstance(exc, PermissionError):
+        reason = "Cookie database access denied. Check Terminal/Python privacy permissions."
+    elif isinstance(exc, OSError):
+        reason = "Cookie database could not be opened. Check the browser profile and filesystem access."
+    else:
+        reason = "Cookie database read failed. Check browser-cookie3 compatibility and the browser profile."
+    profile = path.parent.parent.name if path and path.parent.name == "Network" else path.parent.name if path else "default profile"
+    # Profile directories are fixed Chromium names; do not display arbitrary paths.
+    label = profile if profile == "Default" or profile.startswith("Profile ") else "browser profile"
+    colored_print(f"[COOKIES] {browser_id} ({label}): {reason}", Colors.YELLOW)
+
+
+def get_browser_cookies_for_domain(browser_id, domain, *, diagnose=False):
+    """Read each profile, returning one coherent session for the configured host."""
     browser_functions = {
-        'com.microsoft.edgemac': browser_cookie3.edge,
-        'com.google.chrome': browser_cookie3.chrome,
-        'com.brave.Browser': browser_cookie3.brave,
-        'com.brave.browser': browser_cookie3.brave,  # Alternative Brave bundle ID
-        'org.mozilla.firefox': browser_cookie3.firefox
+        "com.microsoft.edgemac": browser_cookie3.edge,
+        "com.google.chrome": browser_cookie3.chrome,
+        "com.brave.Browser": browser_cookie3.brave,
+        "com.brave.browser": browser_cookie3.brave,
+        "org.mozilla.firefox": browser_cookie3.firefox,
     }
-    
     browser_func = browser_functions.get(browser_id)
     if not browser_func:
-        if browser_id == 'com.apple.safari':
-            colored_print("[ERROR] Safari is not supported due to strict sandboxing restrictions", Colors.RED)
-            log_error("Safari is not supported due to strict sandboxing restrictions")
-            colored_print("[INFO] Please use Chrome, Edge, Firefox, or Brave for automated token extraction", Colors.CYAN)
-            colored_print("[INFO] You can temporarily set one of these as your default browser", Colors.CYAN)
-        else:
-            colored_print(f"[ERROR] Unsupported browser: {browser_id}", Colors.RED)
-            log_error(f"Unsupported browser: {browser_id}")
+        colored_print(f"[COOKIES] Unsupported browser: {browser_id}. Use Chrome, Edge, Firefox, or Brave.", Colors.YELLOW)
         return {}
-    
-    # Try multiple approaches for better compatibility
-    cookies = {}
-    
-    # Approach 1: Try with specific domain
-    try:
-        print(f" Attempting to extract cookies for domain: {domain}", file=sys.stderr)
-        cookie_jar = browser_func(domain_name=domain)
-        cookies = extract_cookies_from_jar(cookie_jar, domain)
-        if cookies:
-            return cookies
-    except Exception as e:
-        pass  # Silent fallback
-    
-    # Approach 2: Try without domain filter (get all cookies)
-    try:
-        cookie_jar = browser_func()
-        cookies = extract_cookies_from_jar(cookie_jar, domain)
-        if cookies:
-            return cookies
-    except Exception as e:
-        pass  # Silent fallback
-    
-    return {}
+
+    files = _cookie_files(browser_id)
+    if not files:
+        colored_print(f"[COOKIES] No cookie databases found for {browser_id} in the standard profile locations.", Colors.YELLOW)
+        return {}
+    host = domain.lower().lstrip(".")
+    # Include parent-domain cookies without decrypting unrelated sites' cookies.
+    labels = host.split(".")
+    domains = [".".join(labels[index:]) for index in range(max(1, len(labels) - 1))]
+    best = {}
+    for path in files:
+        cookies = {}
+        try:
+            for cookie_domain in domains:
+                kwargs = {"domain_name": cookie_domain}
+                if path is not None:
+                    kwargs["cookie_file"] = str(path)
+                jar = browser_func(**kwargs)
+                # Preserve the more specific cookie when parent queries return duplicates.
+                for name, data in extract_cookies_from_jar(jar, host).items():
+                    cookies.setdefault(name, data)
+        except Exception as exc:
+            _cookie_read_warning(browser_id, path, exc)
+        if diagnose:
+            profile = path.parent.parent.name if path and path.parent.name == "Network" else path.parent.name if path else "library-selected"
+            token, name = extract_bearer_token_from_cookies(cookies)
+            expiry = _token_expiry(token) if token else None
+            print(f"[COOKIES] {browser_id} {profile}: {len(cookies)} host cookies; "
+                  f"bearer cookie {name or 'absent'}; expired JWT {expiry is not None and expiry <= time.time()}")
+        if cookies and (not best or _session_rank(cookies) > _session_rank(best)):
+            best = cookies
+    return best
+
 
 def find_session_in_other_browsers(domain, default_bundle_id, is_usable=None):
     """Look for a Portkey bearer token in every supported browser except the default.
@@ -250,7 +310,6 @@ def get_bearer_token():
 
 def main():
     """Main function"""
-    log_start()
     parser = argparse.ArgumentParser(
         description="Extract JWT token from the default browser session data",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -260,8 +319,36 @@ Examples:
   get-bearer                          # Legacy alias
         """
     )
-    parser.parse_args()
+    parser.add_argument(
+        "--diagnose-cookies", action="store_true",
+        help="Report browser profile and cookie-read results without HTTP requests or Keychain writes",
+    )
+    args = parser.parse_args()
+    if args.diagnose_cookies:
+        from importlib.metadata import version
+        from .utils import COOKIE_FALLBACK_BROWSERS
+        from urllib.parse import urlsplit
 
+        config = load_config()
+        domain = urlsplit(config["oauth"]["base_url"]).hostname
+        if not domain:
+            colored_print("[ERROR] The configured control-plane URL has no host", Colors.RED)
+            sys.exit(1)
+        print(f"[COOKIES] browser-cookie3 {version('browser-cookie3')}; host {domain}")
+        found = False
+        for browser in COOKIE_FALLBACK_BROWSERS:
+            files = _cookie_files(browser["bundle_id"])
+            count = len(files) if files != [None] else "library-selected"
+            print(f"[COOKIES] {browser['name']}: {count} cookie database(s)")
+            cookies = get_browser_cookies_for_domain(browser["bundle_id"], domain, diagnose=True)
+            token, name = extract_bearer_token_from_cookies(cookies)
+            expiry = _token_expiry(token) if token else None
+            current = bool(token) and (expiry is None or expiry > time.time())
+            print(f"[COOKIES] {browser['name']}: {len(cookies)} host cookies; bearer cookie {name or 'absent'}; expired JWT {expiry is not None and expiry <= time.time()}")
+            found = found or current
+        sys.exit(0 if found else 1)
+
+    log_start()
     colored_print(" Extracting Portkey JWT token from default browser session data...", Colors.CYAN)
     
     # Load configuration
@@ -329,24 +416,20 @@ Examples:
             print("", file=sys.stderr)
             print("🔐 Saving bearer token to keychain as STUDIO_TOKEN...", file=sys.stderr)
 
-            # Delete existing keychain entry if it exists
-            subprocess.run(['security', 'delete-generic-password', '-s', 'STUDIO_TOKEN'],
-                         capture_output=True, check=False)
+            from .utils import store_keychain_secret
+            stored = store_keychain_secret(token_value, service_name="STUDIO_TOKEN")
 
-            # Add new keychain entry
-            result = subprocess.run(['security', 'add-generic-password', '-s', 'STUDIO_TOKEN',
-                                   '-a', os.getenv('USER', 'user'), '-w', token_value],
-                                  capture_output=True, text=True)
-
-            if result.returncode == 0:
+            if stored:
                 colored_print("[SUCCESS] Bearer token saved to keychain as STUDIO_TOKEN", Colors.GREEN)
                 log_success("Bearer token saved to keychain as STUDIO_TOKEN")
                 print("", file=sys.stderr)
                 colored_print("[INFO] Add this to your ~/.zshrc or ~/.bashrc:", Colors.CYAN)
                 print('export STUDIO_TOKEN=$(security find-generic-password -s "STUDIO_TOKEN" -w)')
             else:
-                colored_print(f"[ERROR] Failed to save to keychain: {result.stderr.strip()}", Colors.RED)
-                log_error(f"Failed to save bearer token to keychain: {result.stderr.strip()}")
+                colored_print("[ERROR] Failed to save bearer token to Keychain", Colors.RED)
+                log_error("Failed to save bearer token to Keychain")
+                log_end()
+                sys.exit(1)
         except Exception as keychain_error:
             colored_print(f"[ERROR] Keychain error: {keychain_error}", Colors.RED)
             log_error(f"Keychain error: {keychain_error}")

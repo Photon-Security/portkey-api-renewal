@@ -97,32 +97,11 @@ def get_current_api_key():
         return None
 
 def update_keychain_key(service_name, account_name, new_key):
-    """Update keychain entry for given service"""
-    try:
-        # First, delete existing entry (ignore if it doesn't exist)
-        subprocess.run([
-            'security', 'delete-generic-password',
-            '-s', service_name
-        ], capture_output=True, text=True)
-        
-        # Then add the new entry
-        add_result = subprocess.run([
-            'security', 'add-generic-password',
-            '-s', service_name,
-            '-a', account_name,
-            '-w', new_key
-        ], capture_output=True, text=True)
-        
-        if add_result.returncode == 0:
-            log_message(f"✅ Updated keychain entry: {service_name}", "🔐")
-            return True
-        else:
-            log_message(f"Failed to add keychain entry {service_name}: {add_result.stderr}", "❌")
-            return False
-            
-    except Exception as e:
-        log_message(f"Error updating keychain: {e}", "❌")
-        return False
+    """Update an account-specific entry without deleting its previous secret."""
+    from .utils import store_keychain_secret
+
+    return store_keychain_secret(new_key, service_name=service_name, account_name=account_name)
+
 
 def update_environment_files(new_key, dry_run=False):
     """DISABLED: Environment file updates removed to prevent corruption"""
@@ -191,6 +170,7 @@ def main():
                 log_success(f"{service_name} updated in keychain", "update_secretmgr.py")
             else:
                 log_error(f"Failed to update {service_name} in keychain", "update_secretmgr.py")
+                sys.exit(1)
         else:
             log_success(f"Would update {service_name} in keychain (dry run)", "update_secretmgr.py")
 

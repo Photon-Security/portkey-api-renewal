@@ -149,6 +149,26 @@ def get_keychain_service_name() -> str:
     return KEYCHAIN_SERVICE_NAME
 
 
+def store_keychain_secret(secret, service_name=None, account_name=None):
+    """Update one account's secret without deleting the existing Keychain item."""
+    service_name = service_name or get_keychain_service_name()
+    account_name = account_name or getpass.getuser()
+    try:
+        result = subprocess.run(
+            ["security", "add-generic-password", "-U", "-s", service_name,
+             "-a", account_name, "-w", secret],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        print("[KEYCHAIN] Could not execute the macOS Keychain update.", file=sys.stderr)
+        return False
+    if result.returncode != 0:
+        # security's stderr can include command arguments, including the secret.
+        print(f"[KEYCHAIN] Update failed for {service_name} (exit {result.returncode}); check Keychain access.", file=sys.stderr)
+        return False
+    return True
+
+
 def build_subprocess_env() -> dict:
     """Inject src into PYTHONPATH so package module subprocesses work from wrappers."""
     env = os.environ.copy()

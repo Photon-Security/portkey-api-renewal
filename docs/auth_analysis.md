@@ -44,36 +44,35 @@ Consequences:
 
 ### Which profile is read
 
-The reader does not look at every profile.
+On macOS, the updater explicitly discovers `Default` and `Profile *` cookie databases for Chrome, Edge, and Brave, including both `Cookies` and `Network/Cookies` layouts. Chrome and Edge release-channel directories are included. Firefox continues to use the library's selected default profile.
 
-- **Chrome:** the first match of `Default/Cookies`, then `Profile */Cookies` in sorted order. If a `Default` profile exists, it is the only one read. A user signed in to Portkey only under `Profile 1` is treated as signed out.
-- **Firefox:** the default profile from `profiles.ini`.
-- Edge and Brave use the same shared Chromium logic (profile path lists not individually verified).
+Each profile is read independently. A current bearer takes priority over an expired JWT or a profile with only load-balancer cookies; among current JWTs the later expiry wins. Cookies from different profiles are never combined. The server must still validate the selected bearer.
 
 ### Cookie selection
 
-The configured Portkey host is queried first. If that finds nothing, all cookies are loaded and filtered afterwards. In both cases only cookies for the exact host or one of its parent domains are kept, so lookalike hosts such as `portkey.example.com.attacker.test` are rejected.
+The configured host and its parent domains are queried, stopping before a single-label domain. Results are filtered to the exact host or applicable parent domains. This retrieves parent-domain authentication cookies even when the exact host already has `AWSALB` cookies, without loading every site's cookies.
 
-The bearer token is the first non-empty value among the cookies `token`, `auth_token`, `access_token`, `id_token`, in that order. A `Bearer ` prefix is stripped. It is sent as:
+The bearer is the first non-empty cookie named `token`, `auth_token`, `access_token`, or `id_token`. A `Bearer ` prefix is stripped. The server receives `Authorization: Bearer <token>`.
 
-```text
-Authorization: Bearer <token>
-```
+### Investigating a retrieval regression
 
-### Why failures look like "No cookies found"
+The original implementation delegated profile selection to `browser_cookie3`, which chooses the first matching database. It also returned immediately when *any* host cookies were found, and swallowed every extraction exception. Consequently, moving a login to another work profile, receiving a parent-domain auth cookie, or losing Safe Storage access could appear as a missing login. Repeating sign-in did not correct those conditions.
 
-Every failure in this stage is swallowed: both extraction attempts catch all exceptions, and `check_key.py` also redirects stderr while reading. These distinct causes therefore all produce the same `No cookies found in browser session`:
+These behaviors were present in the initial repository version; the reviewed history does not establish a recent extraction-code regression. In the investigation on 2026-11-13, Edge 157.0.4341.46 used cookie schema 24, and the installed `browser-cookie3` 0.20.1 successfully retrieved the configured host's cookie names, including `auth_token`. Encrypted fixture tests verify both schema 23 and schema 24 (which prepends a domain hash). This provides no evidence of a general macOS encryption incompatibility on that machine; Stephanie's exact trigger still requires evidence from her installation.
 
-- Not signed in, or the session has expired.
-- Signed in under a different Chrome profile than `Default`. (A non-default *browser* is now covered by the fallback.)
-- Default browser not supported and no other supported browser holds a session.
-- Keychain access to the Safe Storage item denied. `browser_cookie3` then falls back to a default password that fails to decrypt.
+Read/decryption failures now produce `[COOKIES]` messages with actionable categories. Exception bodies and credential values are never displayed. Failed profiles do not prevent reading later profiles.
 
-To see the real error, run this with the same browser (replace `chrome` with `edge`, `brave` or `firefox` as needed):
+Run this from the installed environment with its configured control-plane host:
 
 ```bash
-python3 -c "import browser_cookie3 as b; print(len(list(b.chrome(domain_name='your-portkey-domain.com'))))"
+portkey-get-bearer --diagnose-cookies
 ```
+
+The command reports the library version, discovered database counts, selected cookie names/counts, and bearer expiry state. It makes no HTTP requests or Keychain writes, and does not display cookie values. Chromium readers may prompt to **read** their Safe Storage item. A decryption warning means checking access for the current Python installation and the unlocked login Keychain; it does not prove access denial, since incompatible encrypted data can produce the same category. An absent bearer with readable databases means checking the signed-in profile and session. Exit status is zero when a non-expired bearer is found and one otherwise; this is extraction evidence, not proof of server acceptance.
+
+## Corrections to local storage
+
+API-key and bearer writes use `security add-generic-password -U` with the current account and service. The updater never deletes the old item before attempting its replacement, and checks report failure if persistence fails. `portkey-renew` now saves successful creations to `PORTKEY_API_KEY` and uses the checker's session-validation/login retry flow. Raw keys are not printed when clipboard access fails.
 
 ## Token Validation
 
@@ -83,7 +82,7 @@ Bearer-token validation uses the same endpoint as normal key discovery:
 GET {base_url}/albus/v2/api-keys?workspace_id={workspace_id}
 ```
 
-A `200` response with a JSON `data` array means the browser token can read workspace keys. Non-`200` responses are treated as authentication or permission failures and the tool asks the user to refresh their Portkey browser session.
+A `200` response with a JSON `data` array means the browser token can read workspace keys. Authentication errors (HTTP 401/403 or AB05) trigger one browser sign-in and validated retry. Other failures are reported without requesting another login.
 
 ## API Key Validity
 

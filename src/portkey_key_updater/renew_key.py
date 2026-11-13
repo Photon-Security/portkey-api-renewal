@@ -103,50 +103,16 @@ def request_api_key_with_token(final_token, cookies, silent=False, no_logging=Fa
 
 
 def _extract_session_token_and_cookies(config):
-    """Load browser session cookies and return the token cookie value."""
-    browser_info = get_browser_info()
+    """Use the checker's validated session and bounded interactive login retry."""
+    # Import lazily because check_key also imports the create-key helper here.
+    from .check_key import _extract_session_token_and_cookies as extract_session
+    from .check_key import _validate_or_refresh_session
 
-    if not browser_info or not browser_info.get("bundle_id"):
-        colored_print("[ERROR] Could not detect default browser", Colors.RED)
-        log_error("Could not detect default browser")
+    token, cookies, browser = extract_session(config)
+    valid, token, cookies, _ = _validate_or_refresh_session(config, browser, token, cookies)
+    if not valid:
         sys.exit(1)
-
-    colored_print(
-        f"[INFO] Default browser: {browser_info['name']} ({browser_info['bundle_id']})",
-        Colors.CYAN,
-    )
-    domain = config["oauth"]["base_url"].replace("https://", "").replace("http://", "").split("/")[0]
-    cookies = get_browser_cookies_for_domain(browser_info["bundle_id"], domain)
-
-    if not extract_bearer_token_from_cookies(cookies)[0]:
-        other_session = find_session_in_other_browsers(domain, browser_info["bundle_id"])
-        if other_session:
-            _, cookies, other_browser = other_session
-            browser_info = other_browser
-            colored_print(f"[INFO] Using the Portkey session found in {other_browser['name']}", Colors.CYAN)
-
-    if not cookies:
-        colored_print("[ERROR] No cookies found in browser session", Colors.RED)
-        log_error("No cookies found in browser session")
-        handle_missing_browser_session(config, browser_info)
-        sys.exit(1)
-
-    colored_print(f"[INFO] Found cookies: {', '.join(sorted(cookies))}", Colors.CYAN)
-    token_value, token_cookie_name = extract_bearer_token_from_cookies(cookies)
-
-    if not token_value:
-        colored_print("[ERROR] No bearer token found in cookies", Colors.RED)
-        log_error("No bearer token found in cookies")
-        colored_print("[INFO] Expected one of: token, auth_token, access_token, id_token", Colors.CYAN)
-        colored_print("[INFO] Please make sure you're logged in and authenticated", Colors.CYAN)
-        sys.exit(1)
-
-    colored_print(
-        f"[SUCCESS] Found bearer token in {browser_info.get('name', 'browser')} cookie '{token_cookie_name}'",
-        Colors.GREEN,
-    )
-    log_success(f"Found bearer token in {browser_info.get('name', 'browser')} cookie '{token_cookie_name}'")
-    return token_value, cookies
+    return token, cookies
 
 
 def main():
@@ -199,14 +165,20 @@ Examples:
     success, api_key = request_api_key_with_token(token_value, cookies)
 
     if success and api_key:
-        colored_print("[SUCCESS] Portkey API key generated successfully!", Colors.GREEN)
+        from .utils import store_keychain_secret
+
+        if not store_keychain_secret(api_key):
+            colored_print("[ERROR] Key created, but Keychain synchronization failed.", Colors.RED)
+            log_end()
+            sys.exit(1)
+        colored_print("[SUCCESS] Portkey API key generated and saved to Keychain!", Colors.GREEN)
         log_success("Portkey API key generated successfully")
 
         if copy_to_clipboard(api_key):
             print("📋 API key copied to clipboard!", file=sys.stderr)
         else:
             print("⚠️  Could not copy to clipboard (pbcopy not available)", file=sys.stderr)
-            print(f"📋 API Key: {api_key}")
+
 
         log_end()
         sys.exit(0)

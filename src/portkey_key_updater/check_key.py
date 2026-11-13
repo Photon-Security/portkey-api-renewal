@@ -5,6 +5,7 @@ import argparse
 import base64
 import binascii
 import json
+import getpass
 import os
 import subprocess
 import sys
@@ -261,7 +262,7 @@ def read_existing_api_key():
     """Return the API key already on this machine, preferring Keychain over the environment."""
     service_name = get_keychain_service_name()
     result = subprocess.run(
-        ["security", "find-generic-password", "-s", service_name, "-w"],
+        ["security", "find-generic-password", "-s", service_name, "-a", getpass.getuser(), "-w"],
         capture_output=True,
         text=True,
         check=False,
@@ -323,46 +324,23 @@ def probe_existing_api_key(config):
 
 
 def update_keychain(api_key):
-    """Synchronize the configured Keychain service with the active key."""
-    service_name = get_keychain_service_name()
+    """Synchronize the active key, returning whether it was persisted."""
+    from .utils import store_keychain_secret
+
     try:
-        keychain_result = subprocess.run(
-            ["security", "find-generic-password", "-s", service_name, "-w"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        keychain_key = keychain_result.stdout.strip() if keychain_result.returncode == 0 else None
-
-        if keychain_key == api_key:
-            return
-
-        print("🔄 Keychain key differs from active key, updating...", file=sys.stderr)
-        subprocess.run(
-            ["security", "delete-generic-password", "-s", service_name],
-            capture_output=True,
-            check=False,
-        )
         result = subprocess.run(
-            [
-                "security",
-                "add-generic-password",
-                "-s",
-                service_name,
-                "-a",
-                os.getenv("USER", "user"),
-                "-w",
-                api_key,
-            ],
-            capture_output=True,
-            text=True,
+            ["security", "find-generic-password", "-s", get_keychain_service_name(),
+             "-a", getpass.getuser(), "-w"],
+            capture_output=True, text=True, check=False,
         )
-        if result.returncode == 0:
-            print(f"🔐 Keychain synchronized with active API key ({service_name})", file=sys.stderr)
-        else:
-            print(f"⚠️  Failed to update keychain: {result.stderr.strip()}", file=sys.stderr)
-    except Exception as keychain_error:
-        print(f"⚠️  Keychain sync error: {keychain_error}", file=sys.stderr)
+        if result.returncode == 0 and result.stdout.strip() == api_key:
+            return True
+    except OSError:
+        pass
+    if not store_keychain_secret(api_key):
+        return False
+    print("[KEYCHAIN] Active Portkey API key saved.", file=sys.stderr)
+    return True
 
 
 def check_current_api_key(final_token, cookies, return_key=False, prefetched_keys=None):
@@ -563,7 +541,9 @@ Examples:
     if not args.renew and not args.force_login:
         proven_key = probe_existing_api_key(config)
         if proven_key:
-            update_keychain(proven_key)
+            if not update_keychain(proven_key):
+                log_end()
+                sys.exit(1)
             if copy_to_clipboard(proven_key):
                 print(
                     f"✅ Active Portkey API key copied to clipboard: {obfuscate_key(proven_key)}",
@@ -571,7 +551,7 @@ Examples:
                 )
             else:
                 print(f"✅ Active Portkey API key found: {obfuscate_key(proven_key)}", file=sys.stderr)
-                print(f"📋 API Key: {proven_key}")
+
             run_environment_analysis(proven_key)
             log_end()
             sys.exit(0)
@@ -605,13 +585,14 @@ Examples:
         log_end()
         sys.exit(1)
 
-    update_keychain(current_api_key)
+    if not update_keychain(current_api_key):
+        log_end()
+        sys.exit(1)
 
     if copy_to_clipboard(current_api_key):
         print(f"✅ Active Portkey API key copied to clipboard: {obfuscate_key(current_api_key)}", file=sys.stderr)
     else:
         print(f"✅ Active Portkey API key found: {obfuscate_key(current_api_key)}", file=sys.stderr)
-        print(f"📋 API Key: {current_api_key}")
 
     run_environment_analysis(current_api_key)
 

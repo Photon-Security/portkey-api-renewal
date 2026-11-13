@@ -179,7 +179,7 @@ def _stub_main_side_effects(monkeypatch, argv):
     monkeypatch.setattr(check_key, "_extract_session_token_and_cookies", forbidden)
 
     stored = []
-    monkeypatch.setattr(check_key, "update_keychain", lambda key: stored.append(key))
+    monkeypatch.setattr(check_key, "update_keychain", lambda key: stored.append(key) or True)
     return stored
 
 
@@ -343,3 +343,28 @@ def test_refresh_accepts_session_created_in_another_browser(monkeypatch):
     )
 
     assert result == ("firefox-token", _jar("firefox-token"))
+
+
+def test_expired_stored_key_with_browser_session_creates_and_persists_replacement(monkeypatch):
+    from portkey_key_updater import renew_key
+
+    config = {'oauth': {'base_url': 'https://portkey.example.com', 'workspace_id': 'workspace', 'list_api_keys_endpoint': '/albus/v2/api-keys'}}
+    monkeypatch.setattr(sys, 'argv', ['portkey-check'])
+    monkeypatch.setattr(check_key, 'load_config', lambda: config)
+    monkeypatch.setattr(renew_key, 'load_config', lambda: config)
+    for name in ('log_start', 'log_end', 'log_info', 'log_success'):
+        monkeypatch.setattr(check_key, name, lambda *a, **k: None)
+    monkeypatch.setattr(check_key, 'get_browser_info', lambda: {'bundle_id': 'com.microsoft.edgemac', 'name': 'Edge'})
+    monkeypatch.setattr(check_key, 'read_existing_api_key', lambda: ('pk-expired-fixture', 'Keychain'))
+    monkeypatch.setattr(check_key, 'verify_api_key_inference', lambda *a: ('unauthorized', None, 'HTTP 401'))
+    monkeypatch.setattr(check_key, 'get_browser_cookies_for_domain', lambda *a: _jar('fixture-bearer'))
+    monkeypatch.setattr(check_key, 'list_api_keys', lambda *a: (True, [], None))
+    monkeypatch.setattr(renew_key, 'create_api_key', lambda *a: (True, 'pk-new-fixture', None))
+    monkeypatch.setattr(check_key, 'copy_to_clipboard', lambda *a: True)
+    monkeypatch.setattr(check_key, 'run_environment_analysis', lambda *a: None)
+    stored = []
+    monkeypatch.setattr(check_key, 'update_keychain', lambda key: stored.append(key) or True)
+    with pytest.raises(SystemExit) as exit_info:
+        check_key.main()
+    assert exit_info.value.code == 0
+    assert stored == ['pk-new-fixture']
