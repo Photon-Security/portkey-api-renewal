@@ -20,63 +20,67 @@ Automate Portkey API key renewal on macOS. The tool reads your authenticated Por
 
 The renewer checks an existing API key against the configured inference endpoint. If the key needs renewal, it uses your authenticated browser session to list or create a key through the gateway control plane, then stores the active key in macOS Keychain. A browser sign-in is only needed when the control-plane session is missing or expired.
 
-Your control-plane URL, workspace and organisation IDs, inference URL, and model must all belong to the **same gateway**. Obtain these six settings from your gateway administrator. Do not put API keys or bearer tokens in the script.
+The setup asks for a gateway profile and its control-plane and inference
+settings. Obtain those settings from your gateway administrator. API keys and bearer tokens are never embedded
+in the setup script. For other gateways, pass all six `PORTKEY_OAUTH_BASE`,
+`PORTKEY_OAUTH_WORKSPACE_ID`, `PORTKEY_OAUTH_ORGANISATION_ID`,
+`PORTKEY_OAUTH_KEY_NAME`, `PORTKEY_INFERENCE_BASE`, and `PORTKEY_INFERENCE_MODEL`
+settings to `install.sh`, using values from your gateway administrator.
 
 ### 1. Install or update
 
-Paste this whole function into an interactive zsh terminal. The variables are declared at the top without preset values. The function asks for the six settings, installs `uv` if needed, downloads the installer, and passes your answers to it. It does not save those answers in your shell history or in this repository.
+Paste this command into an interactive zsh terminal:
 
-```sh
-setup_portkey_api_renewer() {
-  local oauth_base workspace_id organisation_id key_name infer_base infer_model installer
-  printf 'Control-plane URL (https://...): '
-  IFS= read -r oauth_base || return 1
-  printf 'Workspace ID: '
-  IFS= read -r workspace_id || return 1
-  printf 'Organisation ID: '
-  IFS= read -r organisation_id || return 1
-  printf 'API key name: '
-  IFS= read -r key_name || return 1
-  printf 'Inference base URL (https://.../v1): '
-  IFS= read -r infer_base || return 1
-  printf 'Inference model: '
-  IFS= read -r infer_model || return 1
-  case "$oauth_base" in https://?*) ;; *) printf 'Enter an HTTPS control-plane URL.\n' >&2; return 1 ;; esac
-  case "$infer_base" in https://?*) ;; *) printf 'Enter an HTTPS inference base URL.\n' >&2; return 1 ;; esac
-  if [[ -z "$workspace_id" || -z "$organisation_id" || -z "$key_name" || -z "$infer_model" ]]; then
-    printf 'All six settings are required.\n' >&2
-    return 1
-  fi
-  command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh || return 1; source "$HOME/.local/bin/env" || return 1; }
-  installer="$(curl -fsSL https://raw.githubusercontent.com/Photon-Security/portkey-api-renewal/refs/heads/main/install.sh)" || return 1
-  [[ "$installer" == *PORTKEY_CONFIG_OVERRIDES_V1* ]] || { printf 'The published installer does not support gateway settings. No installation was started.\n' >&2; return 1; }
-  PORTKEY_OAUTH_BASE="$oauth_base" PORTKEY_OAUTH_WORKSPACE_ID="$workspace_id" PORTKEY_OAUTH_ORGANISATION_ID="$organisation_id" PORTKEY_OAUTH_KEY_NAME="$key_name" PORTKEY_INFERENCE_BASE="$infer_base" PORTKEY_INFERENCE_MODEL="$infer_model" /bin/zsh -c "$installer"
-}
-setup_portkey_api_renewer
+```zsh
+source <(curl -fsSL https://raw.githubusercontent.com/Photon-Security/portkey-api-renewal/refs/heads/main/scripts/setup-portkey.sh)
 ```
 
-The installer uses `~/Applications/Portkey-API-renewal` by default; set `PORTKEY_INSTALL_DIR` before running the function if you need another location. On every successful install or update, it backs up any existing `config/config.json` to a unique `config/config.json.backup.*` file and replaces it with a config built from the freshly installed template and the six settings you entered. It keeps `logs/` and earlier backups. Existing config values are not silently merged back in.
+Select the new or legacy profile and enter the gateway settings. Setup downloads the current package, creates
+the environment and configuration, and loads the checker commands in this
+terminal. Run setup again to update, or select the other gateway to install both.
+The new gateway uses `~/Applications/Portkey-API-renewal`; the legacy gateway
+uses `~/Applications/Portkey-API-renewal-legacy`. Each installation has its own
+configuration. Configuration is replaced from the fresh template on update,
+with an owner-only backup of the previous config; logs are retained.
 
-### 2. Load the key in new terminal sessions
+### 2. Load the commands in future terminal sessions
 
-Add these lines to `~/.zshrc` (adjust the command path if you changed `PORTKEY_INSTALL_DIR`):
+Add the line printed by setup to `~/.zshrc`, **after** any `source ~/.llmrc`
+or other LLM shell setup. For the new gateway installation:
 
-```sh
-alias check_portkey_api="$HOME/Applications/Portkey-API-renewal/.venv/bin/portkey-check"
-export PORTKEY_API_KEY="$(security find-generic-password -s PORTKEY_API_KEY -w 2>/dev/null)"
+```zsh
+source "$HOME/Applications/Portkey-API-renewal/scripts/portkey-shell.sh"
 ```
 
-Open a new terminal or run `source ~/.zshrc`. Tools that consume the key can read `PORTKEY_API_KEY` from the environment. Keep keys out of checked-in JSON or TOML files. To load the latest key into an already open shell after renewal, rerun the `export` line or open a new terminal.
+If only the legacy gateway is installed, use
+`$HOME/Applications/Portkey-API-renewal-legacy/scripts/portkey-shell.sh`.
+Either helper defines both commands. Set `PORTKEY_RENEWER_HOME` before setup
+and before sourcing the helper if you use a different parent directory.
 
 ### 3. Check or renew
 
-```sh
-check_portkey_api
+```zsh
+check_portkey_api         # New gateway (check_portkey is an alias function)
+check_portkey_api_legacy  # Legacy gateway; install it first with setup
 ```
 
-The checker first tests the locally stored key with a one-token inference request. When that key is rejected or absent, it reads control-plane cookies from Chrome, Edge, Firefox, or Brave. If no bearer token is available, it opens the configured control-plane URL in your default browser. Complete sign-in, return to the terminal, and press Enter; the checker waits for cookie propagation, then validates the session and selects or creates a key. The active key is saved to Keychain as `PORTKEY_API_KEY`.
+Each checker tests the existing key with a one-token inference request and
+renews only when needed. If browser authentication is required, sign in and
+complete MFA when prompted. Supported browsers are Chrome, Edge, Firefox, and
+Brave. A successful check also refreshes the matching environment variable in
+the current shell; applications already running need to reload their key.
 
-To update later, run the one-off function again with the same gateway settings. The installer also accepts all six `PORTKEY_OAUTH_BASE`, `PORTKEY_OAUTH_WORKSPACE_ID`, `PORTKEY_OAUTH_ORGANISATION_ID`, `PORTKEY_OAUTH_KEY_NAME`, `PORTKEY_INFERENCE_BASE`, and `PORTKEY_INFERENCE_MODEL` environment variables if you invoke it separately. An installer run without overrides produces a template-based config that you must configure before checking a key.
+The new gateway reads and writes `PORTKEY_API_KEY` in macOS Keychain. The legacy
+gateway uses `PORTKEY_API_KEY_LEGACY`. The helper supplies an explicit config
+path and `PORTKEY_KEYCHAIN_SERVICE`, so the current working directory and stale
+new-gateway environment keys cannot redirect a legacy check. The service
+setting defaults to `PORTKEY_API_KEY` for direct console-script use; when
+invoking a legacy console script directly, also set
+`PORTKEY_KEYCHAIN_SERVICE=PORTKEY_API_KEY_LEGACY`.
+
+Existing keys in `PORTKEY_API_KEY` are not moved to the legacy item automatically.
+If only the legacy key existed there, the legacy checker obtains its key through
+the normal browser session flow and stores it in the separate item.
 
 ## Commands
 

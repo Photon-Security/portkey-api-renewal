@@ -146,7 +146,7 @@ def get_security_report_path() -> Path:
 
 def get_keychain_service_name() -> str:
     """Return the macOS Keychain service used for the active Portkey key."""
-    return KEYCHAIN_SERVICE_NAME
+    return os.getenv("PORTKEY_KEYCHAIN_SERVICE", "").strip() or KEYCHAIN_SERVICE_NAME
 
 
 def store_keychain_secret(secret, service_name=None, account_name=None):

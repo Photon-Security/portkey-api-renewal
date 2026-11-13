@@ -45,3 +45,33 @@ def test_already_stored_key_does_not_require_a_write(monkeypatch):
         return SimpleNamespace(returncode=0, stdout='fixture-key\n', stderr='')
     monkeypatch.setattr(utils.subprocess, 'run', run)
     assert check_key.update_keychain('fixture-key') is True
+
+
+@pytest.mark.parametrize("service", ["PORTKEY_API_KEY", "PORTKEY_API_KEY_LEGACY"])
+def test_profile_uses_selected_keychain_item_for_read_and_write(monkeypatch, service):
+    monkeypatch.setenv("PORTKEY_KEYCHAIN_SERVICE", service)
+    commands = []
+
+    def run(cmd, **kwargs):
+        commands.append(cmd)
+        return SimpleNamespace(returncode=0, stdout='fixture-key\n', stderr='')
+
+    monkeypatch.setattr(utils.subprocess, 'run', run)
+    assert check_key.read_existing_api_key() == ('fixture-key', f'Keychain service {service}')
+    assert utils.store_keychain_secret('replacement-fixture') is True
+    assert len(commands) == 2
+    for cmd in commands:
+        assert cmd[cmd.index('-s') + 1] == service
+
+
+def test_default_keychain_service_is_preserved(monkeypatch):
+    monkeypatch.delenv("PORTKEY_KEYCHAIN_SERVICE", raising=False)
+    assert utils.get_keychain_service_name() == "PORTKEY_API_KEY"
+
+
+def test_legacy_profile_does_not_fall_back_to_new_gateway_environment(monkeypatch):
+    monkeypatch.setenv("PORTKEY_KEYCHAIN_SERVICE", "PORTKEY_API_KEY_LEGACY")
+    monkeypatch.setenv("PORTKEY_API_KEY", "new-gateway-fixture")
+    monkeypatch.delenv("PORTKEY_API_KEY_LEGACY", raising=False)
+    monkeypatch.setattr(utils.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=1))
+    assert check_key.read_existing_api_key() == (None, None)

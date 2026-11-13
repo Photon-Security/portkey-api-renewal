@@ -33,6 +33,17 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - `docs/auth_analysis.md` now documents which browser and profile are read, that no remote debugging is used,
   why failures all surface as "No cookies found", and the existing-key probe.
 
+## [1.1.1] - 2026-11-13
+
+### Fixed
+
+- Honour `PORTKEY_KEYCHAIN_SERVICE` for gateway-specific key reads and writes.
+- Add a published setup script and shell helpers so the documented commands work
+  immediately after setup and can be loaded in future terminals.
+- Install legacy and new gateways in separate directories so an update does not
+  replace the other gateway's configuration or use its Keychain item.
+- Refresh the matching API key environment variable after a successful shell check.
+
 ## [1.1.0] - 2026-10-27
 
 ### Added
